@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Channel {
+  WHATSAPP @map("whatsapp")
+}
+
+enum MessageRole {
+  USER      @map("user")
+  ASSISTANT @map("assistant")
+  TOOL      @map("tool")
+  SYSTEM    @map("system")
+}
+
+enum PendingActionStatus {
+  PENDING   @map("pending")
+  APPROVED  @map("approved")
+  CANCELLED @map("cancelled")
+  EXPIRED   @map("expired")
+  EXECUTED  @map("executed")
+  FAILED    @map("failed")
+}
+
+model User {
+  id             String          @id @default(cuid())
+  whatsappPhone String          @unique
+  googleEmail   String?
+  timezone      String          @default("America/New_York")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  googleAccount GoogleAccount?
+  conversations Conversation[]
+  memoryEntries MemoryEntry[]
+  pendingActions PendingAction[]
+  auditLogs      AuditLog[]
+}
+
+model GoogleAccount {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  accessToken  String
+  refreshToken String
+  expiryDate   DateTime?
+  scope        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  userId    String
+  channel   Channel
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages       Message[]
+  pendingActions PendingAction[]
+
+  @@index([userId, channel])
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  rawPayload     Json?
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model PendingAction {
+  id             String              @id @default(cuid())
+  userId         String
+  conversationId String
+  actionType     String
+  status         PendingActionStatus @default(PENDING)
+  payload        Json
+  approvalCode   String              @unique
+  expiresAt      DateTime
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, conversationId, status, expiresAt])
+}
+
+model MemoryEntry {
+  id         String   @id @default(cuid())
+  userId     String
+  key        String
+  value      Json
+  confidence Float?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+}
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  userId          String?
+  actionType      String
+  toolName        String
+  requestPayload  Json
+  responsePayload Json?
+  status          String
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([toolName, createdAt])
+}
