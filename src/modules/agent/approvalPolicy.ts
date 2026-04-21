@@ -88,16 +88,6 @@ export function getApprovalDecision(
   }
 
   if (toolName === "calendar_create_event" || toolName === "calendar_update_event") {
-    const eventInput = input as { attendees?: string[] };
-    if (eventInput.attendees?.length) {
-      return {
-        requiresApproval: true,
-        confirmationKeyword: "CONFIRM",
-        confirmationMessage: "Event ready. Reply CONFIRM to book it.",
-        reason: "calendar_write_with_attendees"
-      };
-    }
-
     return { requiresApproval: false };
   }
 

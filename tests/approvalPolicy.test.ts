@@ -44,21 +44,9 @@ describe("approval policy", () => {
       ).requiresApproval
     ).toBe(false);
     expect(userClearlyRequestedEmailSend("Send and add to my meetings cal")).toBe(true);
-    expect(
-      getApprovalDecision(
-        "calendar_create_event",
-        {
-          title: "Lunch",
-          start: "2026-04-24T17:00:00.000Z",
-          end: "2026-04-24T18:00:00.000Z",
-          attendees: ["alex@example.com"]
-        },
-        "schedule lunch with Alex"
-      ).requiresApproval
-    ).toBe(true);
   });
 
-  it("allows clear personal calendar writes without extra approval", () => {
+  it("allows calendar writes without extra approval", () => {
     expect(
       userClearlyRequestedCalendarWrite("Add drive down to UVA from 1-3:30 on my calendar tomorrow")
     ).toBe(true);
@@ -74,6 +62,18 @@ describe("approval policy", () => {
         "calendar_create_event",
         { title: "Drive down to UVA", start: "2026-04-21T17:00:00.000Z", end: "2026-04-21T19:30:00.000Z" },
         "Move that to April 21st same time"
+      ).requiresApproval
+    ).toBe(false);
+    expect(
+      getApprovalDecision(
+        "calendar_create_event",
+        {
+          title: "Lunch",
+          start: "2026-04-24T17:00:00.000Z",
+          end: "2026-04-24T18:00:00.000Z",
+          attendees: ["alex@example.com"]
+        },
+        "schedule lunch with Alex"
       ).requiresApproval
     ).toBe(false);
     expect(
