@@ -47,15 +47,6 @@ export function userClearlyRequestedDocCreation(text: string): boolean {
   );
 }
 
-export function userClearlyRequestedEmailSend(text: string): boolean {
-  const normalized = text.toLowerCase();
-  if (/\bdraft\b/.test(normalized) && !/\bsend\b/.test(normalized)) {
-    return false;
-  }
-
-  return /\bsend\b/.test(normalized);
-}
-
 export function userClearlyRequestedCalendarWrite(text: string): boolean {
   const normalized = text.toLowerCase();
   const actionRequested =
@@ -75,15 +66,11 @@ export function getApprovalDecision(
   latestUserMessage: string
 ): ApprovalDecision {
   if (toolName === "gmail_send_draft") {
-    if (userClearlyRequestedEmailSend(latestUserMessage)) {
-      return { requiresApproval: false };
-    }
-
     return {
       requiresApproval: true,
-      confirmationKeyword: "CONFIRM",
-      confirmationMessage: "Draft ready. Want me to send it?",
-      reason: "sending_email_without_explicit_send"
+      confirmationKeyword: "SEND",
+      confirmationMessage: "Draft ready. Reply send to send it, or tell me what to tweak.",
+      reason: "sending_email"
     };
   }
 
@@ -183,7 +170,8 @@ export function buildPendingActionContext(pendingAction: PendingAction | null): 
       subject ? `Subject: ${subject}` : undefined,
       body ? `Body:\n${body}` : undefined,
       draftId ? `Draft ID: ${draftId}` : undefined,
-      "If the user refers to 'the email', 'the draft', 'same as in email', or asks to send it, use this pending draft context."
+      "If the user refers to 'the email', 'the draft', 'same as in email', or asks to send it, use this pending draft context.",
+      "If the user asks to tweak, revise, rewrite, shorten, expand, or change the email, revise this draft."
     ]
       .filter(Boolean)
       .join("\n");

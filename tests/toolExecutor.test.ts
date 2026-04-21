@@ -25,7 +25,10 @@ describe("tool executor email draft flow", () => {
   it("stages a pending send for draft-only requests without forcing approval immediately", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },
-      pendingAction: { create: vi.fn(async () => ({ id: "pending_1" })) }
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        create: vi.fn(async () => ({ id: "pending_1" }))
+      }
     } as any;
 
     const tokenService = {
@@ -46,14 +49,23 @@ describe("tool executor email draft flow", () => {
 
     expect(result.ok).toBe(true);
     expect(result.approvalRequired).not.toBe(true);
-    expect(result.userMessage).toBe("Draft ready. Want me to send it?");
+    expect(result.stopAfterTool).toBe(true);
+    expect(result.userMessage).toContain("Draft ready.");
+    expect(result.userMessage).toContain("To: brad@example.com");
+    expect(result.userMessage).toContain("Subject: Meeting");
+    expect(result.userMessage).toContain("Thursday works.");
+    expect(result.userMessage).toContain("Reply send to send it, or tell me what to tweak.");
+    expect(prisma.pendingAction.updateMany).toHaveBeenCalledOnce();
     expect(prisma.pendingAction.create).toHaveBeenCalledOnce();
   });
 
-  it("does not stage a pending send for explicit send requests", async () => {
+  it("still stages a pending send for explicit send requests so the user can review first", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },
-      pendingAction: { create: vi.fn(async () => ({ id: "pending_1" })) }
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        create: vi.fn(async () => ({ id: "pending_1" }))
+      }
     } as any;
 
     const tokenService = {
@@ -74,7 +86,10 @@ describe("tool executor email draft flow", () => {
 
     expect(result.ok).toBe(true);
     expect(result.approvalRequired).not.toBe(true);
-    expect(result.userMessage).toBeUndefined();
-    expect(prisma.pendingAction.create).not.toHaveBeenCalled();
+    expect(result.stopAfterTool).toBe(true);
+    expect(result.userMessage).toContain("Draft ready.");
+    expect(result.userMessage).toContain("Reply send to send it, or tell me what to tweak.");
+    expect(prisma.pendingAction.updateMany).toHaveBeenCalledOnce();
+    expect(prisma.pendingAction.create).toHaveBeenCalledOnce();
   });
 });

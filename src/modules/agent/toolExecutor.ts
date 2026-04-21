@@ -17,7 +17,6 @@ import {
   expectedConfirmationForPayload,
   getApprovalDecision,
   matchesPositiveConfirmation,
-  userClearlyRequestedEmailSend,
   type PendingToolPayload
 } from "./approvalPolicy";
 import {
@@ -41,6 +40,7 @@ export interface ToolExecutionResult {
   error?: string;
   userMessage?: string;
   approvalRequired?: boolean;
+  stopAfterTool?: boolean;
 }
 
 export class ToolExecutor {
@@ -203,9 +203,13 @@ export class ToolExecutor {
           toolName === "calendar_list_calendars" ||
           (toolName === "calendar_list_events" && !input.calendarId)
             ? ["https://www.googleapis.com/auth/calendar.calendarlist.readonly"]
-            : [],
+            : toolName === "drive_delete_file"
+              ? ["https://www.googleapis.com/auth/drive"]
+              : [],
         reconnectReason:
-          "Reconnect your Google account to access all of your calendars by name"
+          toolName === "drive_delete_file"
+            ? "Reconnect your Google account to delete Drive files"
+            : "Reconnect your Google account to access all of your calendars by name"
       });
 
       if (toolName === "gmail_search_threads") {
@@ -232,30 +236,47 @@ export class ToolExecutor {
           status: "success"
         });
 
-        const explicitSendRequest = userClearlyRequestedEmailSend(context.latestUserMessage);
-        if (!explicitSendRequest) {
-          await createPendingAction(this.prisma, {
+        await this.prisma.pendingAction.updateMany({
+          where: {
             userId: context.user.id,
             conversationId: context.conversation.id,
             actionType: "gmail_send_draft",
-            payload: {
-              toolName: "gmail_send_draft",
-              input: { draftId: data.draftId },
-              confirmationKeyword: "CONFIRM",
-              summary: data.summary,
-              context: {
-                to: data.to,
-                subject: data.subject,
-                body: input.body
-              }
+            status: PendingActionStatus.PENDING
+          },
+          data: { status: PendingActionStatus.CANCELLED }
+        });
+
+        await createPendingAction(this.prisma, {
+          userId: context.user.id,
+          conversationId: context.conversation.id,
+          actionType: "gmail_send_draft",
+          payload: {
+            toolName: "gmail_send_draft",
+            input: { draftId: data.draftId },
+            confirmationKeyword: "SEND",
+            summary: data.summary,
+            context: {
+              to: data.to,
+              subject: data.subject,
+              body: input.body
             }
-          });
-        }
+          }
+        });
 
         return {
           ok: true,
           data,
-          userMessage: explicitSendRequest ? undefined : "Draft ready. Want me to send it?"
+          userMessage: [
+            "Draft ready.",
+            "",
+            `To: ${data.to}`,
+            `Subject: ${data.subject}`,
+            "",
+            input.body,
+            "",
+            "Reply send to send it, or tell me what to tweak."
+          ].join("\n"),
+          stopAfterTool: true
         };
       }
 
@@ -345,6 +366,20 @@ export class ToolExecutor {
         const service = new DriveService(auth);
         const data = await service.readFileMetadata(input.fileId);
         return { ok: true, data };
+      }
+
+      if (toolName === "drive_delete_file") {
+        const service = new DriveService(auth);
+        const data = await service.deleteFile(input.fileId);
+        await this.audit.log({
+          userId: context.user.id,
+          actionType: "drive_delete_file",
+          toolName,
+          requestPayload: input,
+          responsePayload: data,
+          status: "executed"
+        });
+        return { ok: true, data, userMessage: data.summary };
       }
 
       if (toolName === "docs_read_document") {

@@ -7,7 +7,6 @@ import {
   parseConfirmationIntent,
   resolvePendingActionFromConversation,
   userClearlyRequestedCalendarWrite,
-  userClearlyRequestedEmailSend,
   userClearlyRequestedDocCreation
 } from "../src/modules/agent/approvalPolicy";
 
@@ -29,21 +28,17 @@ describe("approval policy", () => {
     expect(matchesPositiveConfirmation("SEND", "CONFIRM")).toBe(true);
   });
 
-  it("requires approval for high-risk tools", () => {
+  it("requires approval before sending a draft", () => {
     expect(
       getApprovalDecision("gmail_send_draft", { draftId: "d1" }, "draft an email to Brad").requiresApproval
     ).toBe(true);
-    expect(userClearlyRequestedEmailSend("send an email to Brad about moving the meeting")).toBe(
-      true
-    );
     expect(
       getApprovalDecision(
         "gmail_send_draft",
         { draftId: "d1" },
         "send an email to Brad about moving the meeting"
       ).requiresApproval
-    ).toBe(false);
-    expect(userClearlyRequestedEmailSend("Send and add to my meetings cal")).toBe(true);
+    ).toBe(true);
   });
 
   it("allows calendar writes without extra approval", () => {
@@ -81,6 +76,13 @@ describe("approval policy", () => {
         "calendar_delete_event",
         { eventId: "event_123", calendarId: "primary" },
         "Delete that and the one on Apr 22"
+      ).requiresApproval
+    ).toBe(false);
+    expect(
+      getApprovalDecision(
+        "drive_delete_file",
+        { fileId: "file_123" },
+        "delete the outdated doc"
       ).requiresApproval
     ).toBe(false);
   });

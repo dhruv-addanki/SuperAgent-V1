@@ -5,6 +5,29 @@ import { AuthRequiredError, ReauthRequiredError } from "../../lib/errors";
 
 const { google } = require("googleapis") as any;
 
+const IMPLIED_SCOPES: Record<string, string[]> = {
+  "https://mail.google.com/": [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.metadata"
+  ],
+  "https://www.googleapis.com/auth/calendar": [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.freebusy"
+  ],
+  "https://www.googleapis.com/auth/drive": [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/documents.readonly"
+  ]
+};
+
 export class GoogleTokenService {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -81,7 +104,19 @@ export class GoogleTokenService {
   }
 }
 
-function hasRequiredScopes(grantedScopes: string, requiredScopes: string[]): boolean {
-  const granted = new Set(grantedScopes.split(/\s+/).filter(Boolean));
+export function hasRequiredScopes(grantedScopes: string, requiredScopes: string[]): boolean {
+  const granted = expandGrantedScopes(grantedScopes);
   return requiredScopes.every((scope) => granted.has(scope));
+}
+
+function expandGrantedScopes(grantedScopes: string): Set<string> {
+  const granted = new Set(grantedScopes.split(/\s+/).filter(Boolean));
+
+  for (const scope of [...granted]) {
+    for (const implied of IMPLIED_SCOPES[scope] ?? []) {
+      granted.add(implied);
+    }
+  }
+
+  return granted;
 }

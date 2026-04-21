@@ -1,5 +1,5 @@
 import { ExternalApiError } from "../../lib/errors";
-import type { DriveFileSummary } from "./googleTypes";
+import type { DeletedDriveFileResult, DriveFileSummary } from "./googleTypes";
 
 const { google } = require("googleapis") as any;
 
@@ -68,6 +68,36 @@ export class DriveService {
       return normalizeFile(result.data);
     } catch (error) {
       throw new ExternalApiError("drive", "I couldn't reach Google Drive right now.", error);
+    }
+  }
+
+  async deleteFile(fileId: string): Promise<DeletedDriveFileResult> {
+    try {
+      const drive = google.drive({ version: "v3", auth: this.auth });
+      const file = await drive.files.get({
+        fileId,
+        fields: "id,name,mimeType,webViewLink",
+        supportsAllDrives: true
+      });
+
+      await drive.files.update({
+        fileId,
+        requestBody: {
+          trashed: true
+        },
+        fields: "id,trashed",
+        supportsAllDrives: true
+      });
+
+      return {
+        fileId,
+        name: file.data.name ?? undefined,
+        mimeType: file.data.mimeType ?? undefined,
+        webViewLink: file.data.webViewLink ?? undefined,
+        summary: `Moved to trash: ${file.data.name ?? "file"}`
+      };
+    } catch (error) {
+      throw new ExternalApiError("drive", "I wasn't able to delete that Drive file.", error);
     }
   }
 }

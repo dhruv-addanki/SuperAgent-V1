@@ -66,6 +66,14 @@ export interface DriveFileSummary {
   owners?: string[];
 }
 
+export interface DeletedDriveFileResult {
+  fileId: string;
+  name?: string;
+  mimeType?: string;
+  webViewLink?: string;
+  summary: string;
+}
+
 export interface CreatedDocResult {
   documentId: string;
   title: string;

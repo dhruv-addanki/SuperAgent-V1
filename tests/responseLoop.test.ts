@@ -73,4 +73,40 @@ describe("response loop", () => {
     expect(result.stoppedForApproval).toBe(true);
     expect(result.assistantMessage).toBe("Draft ready. Reply SEND to send it.");
   });
+
+  it("returns a successful tool message directly when requested", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi.fn(async () => ({
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_2",
+            name: "gmail_create_draft",
+            arguments: JSON.stringify({
+              to: "brad@example.com",
+              subject: "Meeting",
+              body: "Thursday works."
+            })
+          }
+        ]
+      }))
+    };
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "draft email" }],
+      executeTool: vi.fn(async () => ({
+        ok: true,
+        stopAfterTool: true,
+        userMessage: "Draft ready.\n\nTo: brad@example.com"
+      })),
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).toBe("Draft ready.\n\nTo: brad@example.com");
+    expect(result.toolRounds).toBe(0);
+  });
 });

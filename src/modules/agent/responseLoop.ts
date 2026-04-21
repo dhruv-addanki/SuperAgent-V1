@@ -68,6 +68,13 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
     for (const call of calls) {
       const result = await input.executeTool(call.name, call.arguments);
 
+      if (result.userMessage && result.stopAfterTool) {
+        return {
+          assistantMessage: result.userMessage,
+          toolRounds
+        };
+      }
+
       if (result.userMessage && (result.approvalRequired || !result.ok)) {
         return {
           assistantMessage: result.userMessage,
