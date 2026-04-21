@@ -127,15 +127,20 @@ export function buildToolDefinitions(readOnlyMode: boolean): ResponseToolDefinit
     .filter((toolName) => !readOnlyMode || isReadOnlyTool(toolName))
     .map((toolName) => {
       const schema = toolInputSchemas[toolName] as z.ZodTypeAny;
+      const jsonSchema = toJsonSchema(schema, {
+        name: toolName,
+        $refStrategy: "none"
+      });
+      const parameters =
+        ((jsonSchema.definitions as Record<string, Record<string, unknown>> | undefined)?.[
+          toolName
+        ] as Record<string, unknown> | undefined) ?? jsonSchema;
+
       return {
         type: "function",
         name: toolName,
         description: toolDescriptions[toolName],
-        parameters: toJsonSchema(schema, {
-          name: toolName,
-          $refStrategy: "none"
-        }),
-        strict: true
+        parameters
       };
     });
 }
