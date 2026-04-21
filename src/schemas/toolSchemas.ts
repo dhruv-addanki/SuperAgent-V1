@@ -96,6 +96,19 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  docs_read_document: z
+    .object({
+      documentId: z.string().min(1)
+    })
+    .strict(),
+
+  docs_append_document: z
+    .object({
+      documentId: z.string().min(1),
+      content: z.string().min(1)
+    })
+    .strict(),
+
   docs_create_document: z
     .object({
       title: z.string().min(1),
@@ -126,7 +139,11 @@ export const toolDescriptions: Record<ToolName, string> = {
   calendar_delete_event: "Delete a Google Calendar event from a specified calendar.",
   drive_search_files: "Search Google Drive files by text query and optional filters.",
   drive_read_file_metadata: "Read metadata for a Google Drive file.",
-  docs_create_document: "Create a Google Doc with the supplied title and content."
+  docs_read_document: "Read the contents of a Google Doc by document ID.",
+  docs_append_document:
+    "Append content to an existing Google Doc by document ID. Use this when the user refers to an existing/current/same doc.",
+  docs_create_document:
+    "Create a new Google Doc with the supplied title and content. Use only when the user explicitly wants a new document."
 };
 
 export const readOnlyToolNames = [
@@ -135,7 +152,8 @@ export const readOnlyToolNames = [
   "calendar_list_calendars",
   "calendar_list_events",
   "drive_search_files",
-  "drive_read_file_metadata"
+  "drive_read_file_metadata",
+  "docs_read_document"
 ] as const satisfies readonly ToolName[];
 
 export const writeToolNames = [
@@ -144,6 +162,7 @@ export const writeToolNames = [
   "calendar_create_event",
   "calendar_update_event",
   "calendar_delete_event",
+  "docs_append_document",
   "docs_create_document"
 ] as const satisfies readonly ToolName[];
 

@@ -95,15 +95,6 @@ export function getApprovalDecision(
     return { requiresApproval: false };
   }
 
-  if (toolName === "docs_create_document" && !userClearlyRequestedDocCreation(latestUserMessage)) {
-    return {
-      requiresApproval: true,
-      confirmationKeyword: "CONFIRM",
-      confirmationMessage: "Document ready. Reply CONFIRM to create it.",
-      reason: "document_creation_not_explicit"
-    };
-  }
-
   return { requiresApproval: false };
 }
 

@@ -24,5 +24,6 @@ describe("tool schemas", () => {
     const tools = buildToolDefinitions(true);
     expect(tools.some((tool) => tool.name === "gmail_create_draft")).toBe(false);
     expect(tools.some((tool) => tool.name === "calendar_list_events")).toBe(true);
+    expect(tools.some((tool) => tool.name === "docs_read_document")).toBe(true);
   });
 });

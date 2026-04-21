@@ -85,7 +85,7 @@ describe("approval policy", () => {
     ).toBe(false);
   });
 
-  it("allows explicit Google Doc creation without extra approval", () => {
+  it("allows Google Doc writes without extra approval", () => {
     expect(userClearlyRequestedDocCreation("Create a Google Doc with these notes")).toBe(true);
     expect(
       getApprovalDecision(
@@ -100,7 +100,7 @@ describe("approval policy", () => {
         { title: "Notes", content: "hello" },
         "these are notes"
       ).requiresApproval
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("expires old pending actions and returns the newest active one", async () => {

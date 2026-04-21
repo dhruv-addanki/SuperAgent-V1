@@ -72,3 +72,19 @@ export interface CreatedDocResult {
   url: string;
   summary: string;
 }
+
+export interface ReadDocResult {
+  documentId: string;
+  title: string;
+  url: string;
+  text: string;
+  truncated: boolean;
+  summary: string;
+}
+
+export interface UpdatedDocResult {
+  documentId: string;
+  title: string;
+  url: string;
+  summary: string;
+}

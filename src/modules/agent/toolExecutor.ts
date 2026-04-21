@@ -53,6 +53,33 @@ export class ToolExecutor {
     this.audit = new AuditService(prisma);
   }
 
+  private async rememberRecentDocument(
+    userId: string,
+    document: { documentId: string; title: string; url: string }
+  ): Promise<void> {
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_google_doc" } },
+      update: {
+        value: {
+          documentId: document.documentId,
+          title: document.title,
+          url: document.url
+        },
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_google_doc",
+        value: {
+          documentId: document.documentId,
+          title: document.title,
+          url: document.url
+        },
+        confidence: 1
+      }
+    });
+  }
+
   async executeToolCall(
     toolNameValue: string,
     rawInput: unknown,
@@ -320,9 +347,32 @@ export class ToolExecutor {
         return { ok: true, data };
       }
 
+      if (toolName === "docs_read_document") {
+        const service = new DocsService(auth);
+        const data = await service.readDocument(input.documentId);
+        await this.rememberRecentDocument(context.user.id, data);
+        return { ok: true, data };
+      }
+
+      if (toolName === "docs_append_document") {
+        const service = new DocsService(auth);
+        const data = await service.appendToDocument(input);
+        await this.rememberRecentDocument(context.user.id, data);
+        await this.audit.log({
+          userId: context.user.id,
+          actionType: "docs_append_document",
+          toolName,
+          requestPayload: input,
+          responsePayload: data,
+          status: "executed"
+        });
+        return { ok: true, data, userMessage: `Updated: ${data.title}\n${data.url}` };
+      }
+
       if (toolName === "docs_create_document") {
         const service = new DocsService(auth);
         const data = await service.createDocument(input);
+        await this.rememberRecentDocument(context.user.id, data);
         await this.audit.log({
           userId: context.user.id,
           actionType: "docs_create_document",
