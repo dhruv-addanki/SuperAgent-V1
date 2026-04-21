@@ -34,10 +34,24 @@ function plainTextFromPayload(payload: any): string | undefined {
   return undefined;
 }
 
-function encodeMimeMessage(to: string, subject: string, body: string): string {
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function encodeMimeHeader(value: string): string {
+  const sanitized = sanitizeHeaderValue(value);
+  if (!/[^\x20-\x7E]/.test(sanitized)) {
+    return sanitized;
+  }
+
+  const encoded = Buffer.from(sanitized, "utf8").toString("base64");
+  return `=?UTF-8?B?${encoded}?=`;
+}
+
+export function encodeMimeMessage(to: string, subject: string, body: string): string {
   const message = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
+    `To: ${sanitizeHeaderValue(to)}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
     "Content-Type: text/plain; charset=utf-8",
     "MIME-Version: 1.0",
     "",
