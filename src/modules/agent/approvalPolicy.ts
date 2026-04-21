@@ -18,6 +18,7 @@ export interface PendingToolPayload {
   input: unknown;
   confirmationKeyword: Exclude<ConfirmationIntent, "CANCEL">;
   summary?: string;
+  context?: Record<string, unknown>;
 }
 
 export function parseConfirmationIntent(text: string): ConfirmationIntent | null {
@@ -46,6 +47,15 @@ export function userClearlyRequestedDocCreation(text: string): boolean {
   );
 }
 
+export function userClearlyRequestedEmailSend(text: string): boolean {
+  const normalized = text.toLowerCase();
+  if (/\bdraft\b/.test(normalized) && !/\bsend\b/.test(normalized)) {
+    return false;
+  }
+
+  return /\bsend\b/.test(normalized);
+}
+
 export function userClearlyRequestedCalendarWrite(text: string): boolean {
   const normalized = text.toLowerCase();
   const actionRequested =
@@ -65,11 +75,15 @@ export function getApprovalDecision(
   latestUserMessage: string
 ): ApprovalDecision {
   if (toolName === "gmail_send_draft") {
+    if (userClearlyRequestedEmailSend(latestUserMessage)) {
+      return { requiresApproval: false };
+    }
+
     return {
       requiresApproval: true,
-      confirmationKeyword: "SEND",
-      confirmationMessage: "Draft ready. Reply SEND to send it.",
-      reason: "sending_email"
+      confirmationKeyword: "CONFIRM",
+      confirmationMessage: "Draft ready. Want me to send it?",
+      reason: "sending_email_without_explicit_send"
     };
   }
 
@@ -158,6 +172,62 @@ export function expectedConfirmationForPayload(
 ): Exclude<ConfirmationIntent, "CANCEL"> {
   const parsed = payload as Partial<PendingToolPayload>;
   return parsed.confirmationKeyword === "SEND" ? "SEND" : "CONFIRM";
+}
+
+export function matchesPositiveConfirmation(
+  intent: Exclude<ConfirmationIntent, "CANCEL">,
+  expected: Exclude<ConfirmationIntent, "CANCEL">
+): boolean {
+  return intent === expected || (intent === "SEND" && expected === "CONFIRM") || (intent === "CONFIRM" && expected === "SEND");
+}
+
+export function buildPendingActionContext(pendingAction: PendingAction | null): string {
+  if (!pendingAction) return "No pending actions.";
+
+  const payload = pendingAction.payload as Partial<PendingToolPayload> | null;
+  if (!payload?.toolName) return "A pending action exists, but its details are unavailable.";
+
+  if (payload.toolName === "gmail_send_draft") {
+    const subject = typeof payload.context?.subject === "string" ? payload.context.subject : undefined;
+    const to = typeof payload.context?.to === "string" ? payload.context.to : undefined;
+    const body = typeof payload.context?.body === "string" ? payload.context.body : undefined;
+    const draftId =
+      payload.input && typeof payload.input === "object" && typeof (payload.input as { draftId?: unknown }).draftId === "string"
+        ? (payload.input as { draftId: string }).draftId
+        : undefined;
+
+    return [
+      "Pending action: email draft available.",
+      to ? `To: ${to}` : undefined,
+      subject ? `Subject: ${subject}` : undefined,
+      body ? `Body:\n${body}` : undefined,
+      draftId ? `Draft ID: ${draftId}` : undefined,
+      "If the user refers to 'the email', 'the draft', 'same as in email', or asks to send it, use this pending draft context."
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (
+    payload.toolName === "calendar_create_event" ||
+    payload.toolName === "calendar_update_event" ||
+    payload.toolName === "calendar_delete_event"
+  ) {
+    return [
+      `Pending action: ${payload.toolName}.`,
+      payload.summary ? `Summary: ${payload.summary}` : undefined,
+      payload.input ? `Details: ${JSON.stringify(payload.input)}` : undefined
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return [
+    `Pending action: ${payload.toolName}.`,
+    payload.summary ? `Summary: ${payload.summary}` : undefined
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function isReadOnlyModeWriteBlocked(): boolean {

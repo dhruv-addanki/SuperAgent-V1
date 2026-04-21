@@ -16,6 +16,8 @@ import {
   createPendingAction,
   expectedConfirmationForPayload,
   getApprovalDecision,
+  matchesPositiveConfirmation,
+  userClearlyRequestedEmailSend,
   type PendingToolPayload
 } from "./approvalPolicy";
 import {
@@ -124,10 +126,10 @@ export class ToolExecutor {
     intent: "SEND" | "CONFIRM"
   ): Promise<ToolExecutionResult> {
     const expected = expectedConfirmationForPayload(pendingAction.payload);
-    if (intent !== expected) {
+    if (!matchesPositiveConfirmation(intent, expected)) {
       return {
         ok: false,
-        userMessage: `Reply ${expected} to approve this action, or CANCEL to cancel it.`
+        userMessage: "Reply yes to approve this action, or CANCEL to cancel it."
       };
     }
 
@@ -202,23 +204,30 @@ export class ToolExecutor {
           status: "success"
         });
 
-        await createPendingAction(this.prisma, {
-          userId: context.user.id,
-          conversationId: context.conversation.id,
-          actionType: "gmail_send_draft",
-          payload: {
-            toolName: "gmail_send_draft",
-            input: { draftId: data.draftId },
-            confirmationKeyword: "SEND",
-            summary: data.summary
-          }
-        });
+        const explicitSendRequest = userClearlyRequestedEmailSend(context.latestUserMessage);
+        if (!explicitSendRequest) {
+          await createPendingAction(this.prisma, {
+            userId: context.user.id,
+            conversationId: context.conversation.id,
+            actionType: "gmail_send_draft",
+            payload: {
+              toolName: "gmail_send_draft",
+              input: { draftId: data.draftId },
+              confirmationKeyword: "CONFIRM",
+              summary: data.summary,
+              context: {
+                to: data.to,
+                subject: data.subject,
+                body: input.body
+              }
+            }
+          });
+        }
 
         return {
           ok: true,
           data,
-          approvalRequired: true,
-          userMessage: "Draft ready. Reply SEND to send it."
+          userMessage: explicitSendRequest ? undefined : "Draft ready. Want me to send it?"
         };
       }
 

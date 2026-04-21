@@ -1,10 +1,13 @@
 import { PendingActionStatus } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildPendingActionContext,
   getApprovalDecision,
+  matchesPositiveConfirmation,
   parseConfirmationIntent,
   resolvePendingActionFromConversation,
   userClearlyRequestedCalendarWrite,
+  userClearlyRequestedEmailSend,
   userClearlyRequestedDocCreation
 } from "../src/modules/agent/approvalPolicy";
 
@@ -21,10 +24,26 @@ describe("approval policy", () => {
     expect(parseConfirmationIntent("sure")).toBe("CONFIRM");
   });
 
+  it("treats natural positive replies as valid approval for pending sends", () => {
+    expect(matchesPositiveConfirmation("CONFIRM", "SEND")).toBe(true);
+    expect(matchesPositiveConfirmation("SEND", "CONFIRM")).toBe(true);
+  });
+
   it("requires approval for high-risk tools", () => {
     expect(
-      getApprovalDecision("gmail_send_draft", { draftId: "d1" }, "send it").requiresApproval
+      getApprovalDecision("gmail_send_draft", { draftId: "d1" }, "draft an email to Brad").requiresApproval
     ).toBe(true);
+    expect(userClearlyRequestedEmailSend("send an email to Brad about moving the meeting")).toBe(
+      true
+    );
+    expect(
+      getApprovalDecision(
+        "gmail_send_draft",
+        { draftId: "d1" },
+        "send an email to Brad about moving the meeting"
+      ).requiresApproval
+    ).toBe(false);
+    expect(userClearlyRequestedEmailSend("Send and add to my meetings cal")).toBe(true);
     expect(
       getApprovalDecision(
         "calendar_create_event",
@@ -128,5 +147,26 @@ describe("approval policy", () => {
     const result = await resolvePendingActionFromConversation(prisma as any, "u1", "c1", now);
     expect(result?.id).toBe("active");
     expect(actions[0]!.status).toBe(PendingActionStatus.EXPIRED);
+  });
+
+  it("formats pending draft context for the prompt", () => {
+    const context = buildPendingActionContext({
+      payload: {
+        toolName: "gmail_send_draft",
+        input: { draftId: "draft_123" },
+        confirmationKeyword: "CONFIRM",
+        context: {
+          to: "brad@example.com",
+          subject: "Meeting tomorrow",
+          body: "Let's meet at 9:00 AM."
+        }
+      }
+    } as any);
+
+    expect(context).toContain("Pending action: email draft available.");
+    expect(context).toContain("To: brad@example.com");
+    expect(context).toContain("Subject: Meeting tomorrow");
+    expect(context).toContain("Let's meet at 9:00 AM.");
+    expect(context).toContain("Draft ID: draft_123");
   });
 });

@@ -14,7 +14,9 @@ import { GoogleTokenService } from "../google/tokenService";
 import { LongTermMemory } from "../memory/longTermMemory";
 import { ShortTermMemory } from "../memory/shortTermMemory";
 import {
+  buildPendingActionContext,
   expectedConfirmationForPayload,
+  matchesPositiveConfirmation,
   parseConfirmationIntent,
   resolvePendingActionFromConversation
 } from "./approvalPolicy";
@@ -92,9 +94,15 @@ export class AgentOrchestrator {
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memory = await this.longTermMemory.getRelevantMemoryForPrompt(user.id);
+      const pendingAction = await resolvePendingActionFromConversation(
+        this.prisma,
+        user.id,
+        conversation.id
+      );
       const prompt = buildSystemPrompt({
         timezone: user.timezone,
         memory,
+        pendingContext: buildPendingActionContext(pendingAction),
         readOnlyMode: env.GOOGLE_READ_ONLY_MODE,
         nowIso: new Date().toISOString()
       });
@@ -149,11 +157,11 @@ export class AgentOrchestrator {
     }
 
     const expected = expectedConfirmationForPayload(pending.payload);
-    if (input.intent !== expected) {
+    if (!matchesPositiveConfirmation(input.intent, expected)) {
       await this.reply(
         input.conversation.id,
         input.to,
-        `Reply ${expected} to approve this action, or CANCEL to cancel it.`
+        "Reply yes to approve this action, or CANCEL to cancel it."
       );
       return true;
     }

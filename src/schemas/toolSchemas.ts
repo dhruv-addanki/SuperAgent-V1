@@ -114,7 +114,8 @@ export const toolDescriptions: Record<ToolName, string> = {
   gmail_search_threads: "Search Gmail threads and return concise normalized summaries.",
   gmail_read_thread: "Read a Gmail thread by ID and return normalized messages.",
   gmail_create_draft: "Create a Gmail draft. This does not send the email.",
-  gmail_send_draft: "Send an existing Gmail draft by draft ID. Requires approval.",
+  gmail_send_draft:
+    "Send an existing Gmail draft by draft ID. Use this after gmail_create_draft when the user clearly asked to send.",
   calendar_list_calendars: "List the user's Google calendars and their IDs.",
   calendar_list_events:
     "List Google Calendar events in a time window for a specific calendar or the primary calendar.",
