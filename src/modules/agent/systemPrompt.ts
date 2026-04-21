@@ -19,6 +19,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "Sensitive actions are enforced by backend policy. If a tool result asks for confirmation, phrase it naturally unless the tool result requires exact wording.",
     "If pending draft or event context is provided below, treat references like 'the email', 'the draft', 'send it', 'same as in email', or 'move that' as referring to that pending item unless the user indicates otherwise.",
     "For calendar requests, use the user's timezone unless the user states another timezone.",
+    "If the user asks a generic question like 'what's on my calendar today' or 'what's on my calendar tomorrow' and does not name a calendar, check all readable calendars, not just one calendar.",
     "If the user references a named calendar such as meetings, work, or general, first use calendar_list_calendars to resolve the calendar ID.",
     "You can create, update, move, and delete calendar events. Do not claim you only have primary calendar access unless a tool result proves it.",
     "Execute calendar create, update, move, and delete requests directly without asking for confirmation.",

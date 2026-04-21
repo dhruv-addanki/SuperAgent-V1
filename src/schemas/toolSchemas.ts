@@ -118,7 +118,7 @@ export const toolDescriptions: Record<ToolName, string> = {
     "Send an existing Gmail draft by draft ID. Use this after gmail_create_draft when the user clearly asked to send.",
   calendar_list_calendars: "List the user's Google calendars and their IDs.",
   calendar_list_events:
-    "List Google Calendar events in a time window for a specific calendar or the primary calendar.",
+    "List Google Calendar events in a time window. If calendarId is omitted, return events across all readable calendars.",
   calendar_create_event:
     "Create a Google Calendar event on a specified calendar or the primary calendar.",
   calendar_update_event:

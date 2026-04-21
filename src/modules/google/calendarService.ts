@@ -7,7 +7,11 @@ import type {
 
 const { google } = require("googleapis") as any;
 
-function normalizeEvent(event: any, calendarId: string): CalendarEventSummary {
+function normalizeEvent(
+  event: any,
+  calendarId: string,
+  calendarSummary?: string
+): CalendarEventSummary {
   return {
     id: event.id ?? undefined,
     title: event.summary ?? "(Untitled)",
@@ -16,12 +20,44 @@ function normalizeEvent(event: any, calendarId: string): CalendarEventSummary {
     attendees: event.attendees?.map((attendee: any) => attendee.email ?? "").filter(Boolean),
     location: event.location ?? undefined,
     htmlLink: event.htmlLink ?? undefined,
-    calendarId
+    calendarId,
+    calendarSummary
   };
+}
+
+function eventStartTime(value?: string): number {
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
+}
+
+export function mergeCalendarEventCollections(
+  collections: CalendarEventSummary[][],
+  maxResults: number
+): CalendarEventSummary[] {
+  return collections
+    .flat()
+    .sort((left, right) => eventStartTime(left.start) - eventStartTime(right.start))
+    .slice(0, maxResults);
 }
 
 export class CalendarService {
   constructor(private readonly auth: any) {}
+
+  private async fetchReadableCalendars(calendar: any): Promise<Array<{ id: string; summary: string }>> {
+    const result = await calendar.calendarList.list({
+      fields: "items(id,summary,primary,accessRole)",
+      minAccessRole: "reader",
+      showHidden: false
+    });
+
+    return (result.data.items ?? [])
+      .map((entry: any) => ({
+        id: entry.id ?? "",
+        summary: entry.summary ?? "(Untitled calendar)"
+      }))
+      .filter((entry: { id: string }) => Boolean(entry.id));
+  }
 
   async listCalendars(): Promise<CalendarSummary[]> {
     try {
@@ -56,18 +92,41 @@ export class CalendarService {
   }): Promise<CalendarEventSummary[]> {
     try {
       const calendar = google.calendar({ version: "v3", auth: this.auth });
-      const calendarId = input.calendarId ?? "primary";
-      const result = await calendar.events.list({
-        calendarId,
-        timeMin: input.timeMin,
-        timeMax: input.timeMax,
-        singleEvents: true,
-        orderBy: "startTime",
-        maxResults: input.maxResults ?? 25,
-        q: input.query
-      });
+      if (input.calendarId) {
+        const calendarId = input.calendarId;
+        const result = await calendar.events.list({
+          calendarId,
+          timeMin: input.timeMin,
+          timeMax: input.timeMax,
+          singleEvents: true,
+          orderBy: "startTime",
+          maxResults: input.maxResults ?? 25,
+          q: input.query
+        });
 
-      return (result.data.items ?? []).map((event: any) => normalizeEvent(event, calendarId));
+        return (result.data.items ?? []).map((event: any) => normalizeEvent(event, calendarId));
+      }
+
+      const calendars = await this.fetchReadableCalendars(calendar);
+      const perCalendarResults = await Promise.all(
+        calendars.map(async (entry) => {
+          const result = await calendar.events.list({
+            calendarId: entry.id,
+            timeMin: input.timeMin,
+            timeMax: input.timeMax,
+            singleEvents: true,
+            orderBy: "startTime",
+            maxResults: input.maxResults ?? 25,
+            q: input.query
+          });
+
+          return (result.data.items ?? []).map((event: any) =>
+            normalizeEvent(event, entry.id, entry.summary)
+          );
+        })
+      );
+
+      return mergeCalendarEventCollections(perCalendarResults, input.maxResults ?? 25);
     } catch (error) {
       throw new ExternalApiError("calendar", "I couldn't reach Google Calendar right now.", error);
     }

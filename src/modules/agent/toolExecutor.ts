@@ -173,7 +173,8 @@ export class ToolExecutor {
     try {
       const auth = await this.tokenService.getOAuthClientForUser(context.user, {
         requiredScopes:
-          toolName === "calendar_list_calendars"
+          toolName === "calendar_list_calendars" ||
+          (toolName === "calendar_list_events" && !input.calendarId)
             ? ["https://www.googleapis.com/auth/calendar.calendarlist.readonly"]
             : [],
         reconnectReason:

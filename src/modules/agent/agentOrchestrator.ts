@@ -25,6 +25,12 @@ import { buildSystemPrompt } from "./systemPrompt";
 import { ToolExecutor } from "./toolExecutor";
 import { getAvailableToolDefinitions } from "./toolRegistry";
 import { runResponseLoop } from "./responseLoop";
+import {
+  calendarOverviewWindow,
+  formatCalendarOverview,
+  matchGenericCalendarOverviewRequest
+} from "./calendarReadShortcut";
+import type { CalendarEventSummary } from "../google/googleTypes";
 
 export interface InboundWhatsAppTextInput {
   from: string;
@@ -86,6 +92,40 @@ export class AgentOrchestrator {
           conversation.id,
           input.from,
           `Connect your Google account first: ${this.tokenService.getConnectUrl(user.whatsappPhone)}`
+        );
+        return;
+      }
+
+      const genericCalendarOverview = matchGenericCalendarOverviewRequest(input.text);
+      if (genericCalendarOverview) {
+        const window = calendarOverviewWindow(genericCalendarOverview, user.timezone);
+        const result = await this.toolExecutor.executeToolCall(
+          "calendar_list_events",
+          {
+            timeMin: window.timeMin,
+            timeMax: window.timeMax,
+            maxResults: 50
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: input.text
+          }
+        );
+
+        if (!result.ok) {
+          await this.reply(
+            conversation.id,
+            input.from,
+            result.userMessage ?? "I couldn't reach Google Calendar right now."
+          );
+          return;
+        }
+
+        await this.reply(
+          conversation.id,
+          input.from,
+          formatCalendarOverview((result.data as CalendarEventSummary[] | undefined) ?? [], user.timezone, window.label)
         );
         return;
       }
