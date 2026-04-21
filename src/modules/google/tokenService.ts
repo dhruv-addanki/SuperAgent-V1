@@ -1,7 +1,7 @@
 import type { PrismaClient, User } from "@prisma/client";
 import { env } from "../../config/env";
 import { decryptString, encryptString } from "../../lib/crypto";
-import { AuthRequiredError } from "../../lib/errors";
+import { AuthRequiredError, ReauthRequiredError } from "../../lib/errors";
 
 const { google } = require("googleapis") as any;
 
@@ -14,13 +14,26 @@ export class GoogleTokenService {
     return url.toString();
   }
 
-  async getOAuthClientForUser(user: Pick<User, "id" | "whatsappPhone">): Promise<any> {
+  async getOAuthClientForUser(
+    user: Pick<User, "id" | "whatsappPhone">,
+    options: { requiredScopes?: string[]; reconnectReason?: string } = {}
+  ): Promise<any> {
     const account = await this.prisma.googleAccount.findUnique({
       where: { userId: user.id }
     });
 
     if (!account) {
       throw new AuthRequiredError(this.getConnectUrl(user.whatsappPhone));
+    }
+
+    if (
+      options.requiredScopes?.length &&
+      !hasRequiredScopes(account.scope, options.requiredScopes)
+    ) {
+      throw new ReauthRequiredError(
+        this.getConnectUrl(user.whatsappPhone),
+        options.reconnectReason ?? "Reconnect your Google account to grant additional access"
+      );
     }
 
     const oauthClient = new google.auth.OAuth2(
@@ -66,4 +79,9 @@ export class GoogleTokenService {
     const count = await this.prisma.googleAccount.count({ where: { userId } });
     return count > 0;
   }
+}
+
+function hasRequiredScopes(grantedScopes: string, requiredScopes: string[]): boolean {
+  const granted = new Set(grantedScopes.split(/\s+/).filter(Boolean));
+  return requiredScopes.every((scope) => granted.has(scope));
 }

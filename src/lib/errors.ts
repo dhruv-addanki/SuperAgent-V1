@@ -19,6 +19,12 @@ export class AuthRequiredError extends UserFacingError {
   }
 }
 
+export class ReauthRequiredError extends UserFacingError {
+  constructor(authUrl: string, reason: string) {
+    super("Google account needs additional access", "GOOGLE_REAUTH_REQUIRED", `${reason}: ${authUrl}`);
+  }
+}
+
 export class ExternalApiError extends UserFacingError {
   constructor(service: string, userMessage: string, cause?: unknown) {
     super(`${service} API request failed`, `${service.toUpperCase()}_API_ERROR`, userMessage);

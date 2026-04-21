@@ -37,21 +37,48 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  calendar_list_calendars: z.object({}).strict(),
+
   calendar_list_events: z
     .object({
       timeMin: isoDate,
-      timeMax: isoDate
+      timeMax: isoDate,
+      calendarId: z.string().min(1).optional(),
+      query: z.string().min(1).optional(),
+      maxResults: z.number().int().positive().max(50).optional()
     })
     .strict(),
 
   calendar_create_event: z
     .object({
+      calendarId: z.string().min(1).optional(),
       title: z.string().min(1),
       start: isoDate,
       end: isoDate,
       attendees: z.array(z.string().email()).optional(),
       location: z.string().optional(),
       description: z.string().optional()
+    })
+    .strict(),
+
+  calendar_update_event: z
+    .object({
+      eventId: z.string().min(1),
+      calendarId: z.string().min(1).optional(),
+      targetCalendarId: z.string().min(1).optional(),
+      title: z.string().min(1).optional(),
+      start: isoDate.optional(),
+      end: isoDate.optional(),
+      attendees: z.array(z.string().email()).optional(),
+      location: z.string().optional(),
+      description: z.string().optional()
+    })
+    .strict(),
+
+  calendar_delete_event: z
+    .object({
+      eventId: z.string().min(1),
+      calendarId: z.string().min(1).optional()
     })
     .strict(),
 
@@ -88,8 +115,14 @@ export const toolDescriptions: Record<ToolName, string> = {
   gmail_read_thread: "Read a Gmail thread by ID and return normalized messages.",
   gmail_create_draft: "Create a Gmail draft. This does not send the email.",
   gmail_send_draft: "Send an existing Gmail draft by draft ID. Requires approval.",
-  calendar_list_events: "List Google Calendar events in a time window.",
-  calendar_create_event: "Create a Google Calendar event on the primary calendar.",
+  calendar_list_calendars: "List the user's Google calendars and their IDs.",
+  calendar_list_events:
+    "List Google Calendar events in a time window for a specific calendar or the primary calendar.",
+  calendar_create_event:
+    "Create a Google Calendar event on a specified calendar or the primary calendar.",
+  calendar_update_event:
+    "Update an existing Google Calendar event, optionally moving it to another calendar.",
+  calendar_delete_event: "Delete a Google Calendar event from a specified calendar.",
   drive_search_files: "Search Google Drive files by text query and optional filters.",
   drive_read_file_metadata: "Read metadata for a Google Drive file.",
   docs_create_document: "Create a Google Doc with the supplied title and content."
@@ -98,6 +131,7 @@ export const toolDescriptions: Record<ToolName, string> = {
 export const readOnlyToolNames = [
   "gmail_search_threads",
   "gmail_read_thread",
+  "calendar_list_calendars",
   "calendar_list_events",
   "drive_search_files",
   "drive_read_file_metadata"
@@ -107,6 +141,8 @@ export const writeToolNames = [
   "gmail_create_draft",
   "gmail_send_draft",
   "calendar_create_event",
+  "calendar_update_event",
+  "calendar_delete_event",
   "docs_create_document"
 ] as const satisfies readonly ToolName[];
 

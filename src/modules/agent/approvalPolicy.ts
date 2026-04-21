@@ -25,8 +25,15 @@ export function parseConfirmationIntent(text: string): ConfirmationIntent | null
     .trim()
     .toLowerCase()
     .replace(/[.!?]+$/g, "");
-  if (["send", "send it"].includes(normalized)) return "SEND";
-  if (["confirm", "book it", "create it"].includes(normalized)) return "CONFIRM";
+  if (["send", "send it"].includes(normalized) || /^yes\b.*\bsend it\b/.test(normalized)) {
+    return "SEND";
+  }
+  if (
+    ["confirm", "book it", "create it", "go ahead", "do it", "do that", "ok", "okay", "yes", "sure"].includes(normalized) ||
+    /^yes\b.*\b(confirm|book it|create it)\b/.test(normalized)
+  ) {
+    return "CONFIRM";
+  }
   if (["cancel", "stop", "never mind", "nevermind"].includes(normalized)) return "CANCEL";
   return null;
 }
@@ -37,6 +44,19 @@ export function userClearlyRequestedDocCreation(text: string): boolean {
     /\b(create|make|start|write|draft)\b/.test(normalized) &&
     /\b(google doc|doc|document)\b/.test(normalized)
   );
+}
+
+export function userClearlyRequestedCalendarWrite(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const actionRequested =
+    /\b(add|book|create|move|put|schedule|reschedule|remove|delete|cancel)\b/.test(normalized) ||
+    /\bon my calendar\b/.test(normalized);
+  const calendarContext =
+    /\b(calendar|event|meeting|appointment|lunch|dinner|drive|trip|flight)\b/.test(normalized) ||
+    /\bon my calendar\b/.test(normalized) ||
+    /\b(that|it)\b/.test(normalized);
+
+  return actionRequested && calendarContext;
 }
 
 export function getApprovalDecision(
@@ -53,13 +73,22 @@ export function getApprovalDecision(
     };
   }
 
-  if (toolName === "calendar_create_event") {
-    return {
-      requiresApproval: true,
-      confirmationKeyword: "CONFIRM",
-      confirmationMessage: "Event ready. Reply CONFIRM to book it.",
-      reason: "calendar_write"
-    };
+  if (toolName === "calendar_create_event" || toolName === "calendar_update_event") {
+    const eventInput = input as { attendees?: string[] };
+    if (eventInput.attendees?.length) {
+      return {
+        requiresApproval: true,
+        confirmationKeyword: "CONFIRM",
+        confirmationMessage: "Event ready. Reply CONFIRM to book it.",
+        reason: "calendar_write_with_attendees"
+      };
+    }
+
+    return { requiresApproval: false };
+  }
+
+  if (toolName === "calendar_delete_event") {
+    return { requiresApproval: false };
   }
 
   if (toolName === "docs_create_document" && !userClearlyRequestedDocCreation(latestUserMessage)) {

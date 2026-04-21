@@ -169,7 +169,14 @@ export class ToolExecutor {
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
     try {
-      const auth = await this.tokenService.getOAuthClientForUser(context.user);
+      const auth = await this.tokenService.getOAuthClientForUser(context.user, {
+        requiredScopes:
+          toolName === "calendar_list_calendars"
+            ? ["https://www.googleapis.com/auth/calendar.calendarlist.readonly"]
+            : [],
+        reconnectReason:
+          "Reconnect your Google account to access all of your calendars by name"
+      });
 
       if (toolName === "gmail_search_threads") {
         const service = new GmailService(auth);
@@ -229,9 +236,15 @@ export class ToolExecutor {
         return { ok: true, data, userMessage: "Sent the draft." };
       }
 
+      if (toolName === "calendar_list_calendars") {
+        const service = new CalendarService(auth);
+        const data = await service.listCalendars();
+        return { ok: true, data };
+      }
+
       if (toolName === "calendar_list_events") {
         const service = new CalendarService(auth);
-        const data = await service.listEvents(input.timeMin, input.timeMax);
+        const data = await service.listEvents(input);
         return { ok: true, data };
       }
 
@@ -251,6 +264,38 @@ export class ToolExecutor {
           data,
           userMessage: `Booked: ${data.title}${data.start ? ` at ${formatForUser(data.start, context.user.timezone)}` : ""}.`
         };
+      }
+
+      if (toolName === "calendar_update_event") {
+        const service = new CalendarService(auth);
+        const data = await service.updateEvent(input);
+        await this.audit.log({
+          userId: context.user.id,
+          actionType: "calendar_update_event",
+          toolName,
+          requestPayload: input,
+          responsePayload: data,
+          status: "executed"
+        });
+        return {
+          ok: true,
+          data,
+          userMessage: `Updated: ${data.title}${data.start ? ` at ${formatForUser(data.start, context.user.timezone)}` : ""}.`
+        };
+      }
+
+      if (toolName === "calendar_delete_event") {
+        const service = new CalendarService(auth);
+        const data = await service.deleteEvent(input);
+        await this.audit.log({
+          userId: context.user.id,
+          actionType: "calendar_delete_event",
+          toolName,
+          requestPayload: input,
+          responsePayload: data,
+          status: "executed"
+        });
+        return { ok: true, data, userMessage: data.summary };
       }
 
       if (toolName === "drive_search_files") {

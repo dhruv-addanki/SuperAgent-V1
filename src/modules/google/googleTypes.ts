@@ -39,6 +39,22 @@ export interface CalendarEventSummary {
   attendees?: string[];
   location?: string;
   htmlLink?: string;
+  calendarId?: string;
+  calendarSummary?: string;
+}
+
+export interface CalendarSummary {
+  id: string;
+  summary: string;
+  primary?: boolean;
+  accessRole?: string;
+}
+
+export interface DeletedCalendarEventResult {
+  eventId: string;
+  calendarId: string;
+  title?: string;
+  summary: string;
 }
 
 export interface DriveFileSummary {
