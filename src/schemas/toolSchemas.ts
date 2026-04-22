@@ -37,6 +37,12 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  gmail_trash_thread: z
+    .object({
+      threadId: z.string().min(1)
+    })
+    .strict(),
+
   calendar_list_calendars: z.object({}).strict(),
 
   calendar_list_events: z
@@ -102,6 +108,13 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  web_search: z
+    .object({
+      query: z.string().min(1),
+      allowedDomains: z.array(z.string().min(1)).max(20).optional()
+    })
+    .strict(),
+
   docs_read_document: z
     .object({
       documentId: z.string().min(1)
@@ -135,6 +148,8 @@ export const toolDescriptions: Record<ToolName, string> = {
   gmail_create_draft: "Create a Gmail draft. This does not send the email.",
   gmail_send_draft:
     "Send an existing Gmail draft by draft ID. Use this after gmail_create_draft when the user clearly asked to send.",
+  gmail_trash_thread:
+    "Move a Gmail thread to Trash by thread ID. Use this when the user clearly asks to delete email(s).",
   calendar_list_calendars: "List the user's Google calendars and their IDs.",
   calendar_list_events:
     "List Google Calendar events in a time window. If calendarId is omitted, return events across all readable calendars.",
@@ -147,6 +162,8 @@ export const toolDescriptions: Record<ToolName, string> = {
   drive_read_file_metadata: "Read metadata for a Google Drive file.",
   drive_delete_file:
     "Move a Google Drive file, including a Google Doc, to trash by file ID.",
+  web_search:
+    "Search the public web for current factual information and return a concise summary with source URLs.",
   docs_read_document: "Read the contents of a Google Doc by document ID.",
   docs_append_document:
     "Append content to an existing Google Doc by document ID. Use this when the user refers to an existing/current/same doc.",
@@ -157,6 +174,7 @@ export const toolDescriptions: Record<ToolName, string> = {
 export const readOnlyToolNames = [
   "gmail_search_threads",
   "gmail_read_thread",
+  "web_search",
   "calendar_list_calendars",
   "calendar_list_events",
   "drive_search_files",
@@ -167,6 +185,7 @@ export const readOnlyToolNames = [
 export const writeToolNames = [
   "gmail_create_draft",
   "gmail_send_draft",
+  "gmail_trash_thread",
   "calendar_create_event",
   "calendar_update_event",
   "calendar_delete_event",

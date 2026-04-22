@@ -31,6 +31,11 @@ export interface GmailSendResult {
   threadId?: string;
 }
 
+export interface GmailTrashResult {
+  threadId: string;
+  summary: string;
+}
+
 export interface CalendarEventSummary {
   id?: string;
   title: string;
@@ -95,4 +100,13 @@ export interface UpdatedDocResult {
   title: string;
   url: string;
   summary: string;
+}
+
+export interface WebSearchResult {
+  query: string;
+  summary: string;
+  sources: Array<{
+    title?: string;
+    url: string;
+  }>;
 }

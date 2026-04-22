@@ -23,7 +23,9 @@ describe("tool schemas", () => {
   it("omits write tools in read-only mode", () => {
     const tools = buildToolDefinitions(true);
     expect(tools.some((tool) => tool.name === "gmail_create_draft")).toBe(false);
+    expect(tools.some((tool) => tool.name === "gmail_trash_thread")).toBe(false);
     expect(tools.some((tool) => tool.name === "drive_delete_file")).toBe(false);
+    expect(tools.some((tool) => tool.name === "web_search")).toBe(true);
     expect(tools.some((tool) => tool.name === "calendar_list_events")).toBe(true);
     expect(tools.some((tool) => tool.name === "docs_read_document")).toBe(true);
   });

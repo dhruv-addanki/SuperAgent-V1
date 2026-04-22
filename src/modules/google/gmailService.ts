@@ -2,6 +2,7 @@ import { ExternalApiError } from "../../lib/errors";
 import type {
   GmailDraftResult,
   GmailSendResult,
+  GmailTrashResult,
   GmailThreadMessage,
   GmailThreadSummary
 } from "./googleTypes";
@@ -170,6 +171,23 @@ export class GmailService {
       };
     } catch (error) {
       throw new ExternalApiError("gmail", "I wasn't able to send that email.", error);
+    }
+  }
+
+  async trashThread(threadId: string): Promise<GmailTrashResult> {
+    try {
+      const gmail = google.gmail({ version: "v1", auth: this.auth });
+      await gmail.users.threads.trash({
+        userId: "me",
+        id: threadId
+      });
+
+      return {
+        threadId,
+        summary: "Moved the email thread to Trash."
+      };
+    } catch (error) {
+      throw new ExternalApiError("gmail", "I wasn't able to delete that email.", error);
     }
   }
 }

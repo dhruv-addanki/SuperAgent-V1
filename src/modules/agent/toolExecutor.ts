@@ -12,6 +12,7 @@ import { DocsService } from "../google/docsService";
 import { DriveService } from "../google/driveService";
 import { GmailService } from "../google/gmailService";
 import { GoogleTokenService } from "../google/tokenService";
+import { WebSearchService } from "./webSearchService";
 import {
   createPendingAction,
   expectedConfirmationForPayload,
@@ -27,6 +28,7 @@ import {
 } from "../../schemas/toolSchemas";
 import { serializeError, userMessageForError } from "../../lib/errors";
 import { formatForUser } from "../../lib/time";
+import type { GmailThreadSummary } from "../google/googleTypes";
 
 export interface ToolExecutionContext {
   user: User;
@@ -75,6 +77,33 @@ export class ToolExecutor {
           title: document.title,
           url: document.url
         },
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentGmailThreads(
+    userId: string,
+    threads: GmailThreadSummary[]
+  ): Promise<void> {
+    const normalizedThreads = threads.slice(0, 10).map((thread) => ({
+      threadId: thread.threadId,
+      subject: thread.subject,
+      from: thread.from,
+      date: thread.date,
+      snippet: thread.snippet
+    }));
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_gmail_threads" } },
+      update: {
+        value: normalizedThreads,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_gmail_threads",
+        value: normalizedThreads,
         confidence: 1
       }
     });
@@ -198,6 +227,12 @@ export class ToolExecutor {
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
     try {
+      if (toolName === "web_search") {
+        const service = new WebSearchService();
+        const data = await service.search(input.query, input.allowedDomains);
+        return { ok: true, data };
+      }
+
       const auth = await this.tokenService.getOAuthClientForUser(context.user, {
         requiredScopes:
           toolName === "calendar_list_calendars" ||
@@ -215,6 +250,7 @@ export class ToolExecutor {
       if (toolName === "gmail_search_threads") {
         const service = new GmailService(auth);
         const data = await service.searchThreads(input.query, input.maxResults);
+        await this.rememberRecentGmailThreads(context.user.id, data);
         return { ok: true, data };
       }
 
@@ -292,6 +328,20 @@ export class ToolExecutor {
           status: "executed"
         });
         return { ok: true, data, userMessage: "Sent the draft." };
+      }
+
+      if (toolName === "gmail_trash_thread") {
+        const service = new GmailService(auth);
+        const data = await service.trashThread(input.threadId);
+        await this.audit.log({
+          userId: context.user.id,
+          actionType: "gmail_trash_thread",
+          toolName,
+          requestPayload: input,
+          responsePayload: data,
+          status: "executed"
+        });
+        return { ok: true, data, userMessage: data.summary };
       }
 
       if (toolName === "calendar_list_calendars") {
