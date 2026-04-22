@@ -10,7 +10,7 @@ COPY prisma ./prisma
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
-COPY tsconfig.json eslint.config.js .prettierrc ./
+COPY tsconfig.json tsconfig.build.json eslint.config.js .prettierrc ./
 COPY src ./src
 RUN pnpm prisma:generate
 RUN pnpm build
