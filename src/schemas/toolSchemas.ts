@@ -147,6 +147,13 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  asana_list_teams: z
+    .object({
+      workspaceGid: z.string().min(1),
+      query: z.string().min(1).optional()
+    })
+    .strict(),
+
   asana_list_users: z
     .object({
       workspaceGid: z.string().min(1),
@@ -159,6 +166,17 @@ export const toolInputSchemas = {
       workspaceGid: z.string().min(1).optional(),
       projectGid: z.string().min(1).optional(),
       completed: z.boolean().optional(),
+      dueOn: isoDateOnly.optional(),
+      dueBefore: isoDateOrDateTime.optional(),
+      limit: z.number().int().positive().max(100).optional()
+    })
+    .strict(),
+
+  asana_list_project_tasks: z
+    .object({
+      projectGid: z.string().min(1),
+      completed: z.boolean().optional(),
+      dueOn: isoDateOnly.optional(),
       dueBefore: isoDateOrDateTime.optional(),
       limit: z.number().int().positive().max(100).optional()
     })
@@ -246,13 +264,17 @@ export const toolDescriptions: Record<ToolName, string> = {
     "Create a new Google Doc with the supplied title and content. Use only when the user explicitly wants a new document.",
   asana_list_workspaces: "List the Asana workspaces visible to the connected user.",
   asana_list_projects:
-    "List Asana projects in a workspace. Use this to resolve a project before reading or writing tasks.",
+    "List Asana projects in a workspace, including team projects when available. Use this to resolve a project before reading or writing tasks.",
+  asana_list_teams:
+    "List Asana teams in a workspace. Use this when the user refers to a team or when project discovery needs more workspace context.",
   asana_list_users:
     "List Asana users in a workspace. Use this to resolve an assignee before creating or reassigning tasks.",
   asana_list_my_tasks:
-    "List tasks from Asana My Tasks or from a specific Asana project. Prefer this for normal task browsing.",
+    "List tasks from Asana My Tasks. Prefer this for personal task browsing, due today, due soon, or follow-up requests about the user's own work.",
+  asana_list_project_tasks:
+    "List tasks from a specific Asana project. Prefer this for project browsing instead of Asana search.",
   asana_search_tasks:
-    "Search Asana tasks in a workspace by text and optional filters. Use this only for explicit search requests.",
+    "Search Asana tasks in a workspace by literal text and optional filters. Use this only for explicit keyword search requests.",
   asana_get_task: "Read a single Asana task by task GID.",
   asana_create_task: "Create a new Asana task.",
   asana_update_task:
@@ -272,8 +294,10 @@ export const readOnlyToolNames = [
   "docs_read_document",
   "asana_list_workspaces",
   "asana_list_projects",
+  "asana_list_teams",
   "asana_list_users",
   "asana_list_my_tasks",
+  "asana_list_project_tasks",
   "asana_search_tasks",
   "asana_get_task"
 ] as const satisfies readonly ToolName[];

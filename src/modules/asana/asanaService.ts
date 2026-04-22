@@ -4,11 +4,15 @@ import type {
   AsanaProjectSummary,
   AsanaTaskDetail,
   AsanaTaskSummary,
+  AsanaTeamSummary,
   AsanaUserSummary,
   AsanaWorkspaceSummary
 } from "./asanaTypes";
 
 const ASANA_API_BASE_URL = "https://app.asana.com/api/1.0";
+const MAX_COLLECTION_PAGES = 10;
+const MAX_COLLECTION_ITEMS = 500;
+const COMPLETED_SINCE_ALL = "1970-01-01T00:00:00.000Z";
 const TASK_FIELDS = [
   "gid",
   "name",
@@ -27,7 +31,16 @@ const TASK_FIELDS = [
   "modified_at"
 ].join(",");
 const WORKSPACE_FIELDS = ["gid", "name", "is_organization"].join(",");
-const PROJECT_FIELDS = ["gid", "name", "archived", "workspace.gid", "workspace.name"].join(",");
+const PROJECT_FIELDS = [
+  "gid",
+  "name",
+  "archived",
+  "workspace.gid",
+  "workspace.name",
+  "team.gid",
+  "team.name"
+].join(",");
+const TEAM_FIELDS = ["gid", "name", "organization.gid", "organization.name"].join(",");
 const USER_FIELDS = ["gid", "name", "email"].join(",");
 
 function normalizeWorkspace(workspace: any): AsanaWorkspaceSummary {
@@ -38,12 +51,23 @@ function normalizeWorkspace(workspace: any): AsanaWorkspaceSummary {
   };
 }
 
+function normalizeTeam(team: any): AsanaTeamSummary {
+  return {
+    gid: team.gid ?? "",
+    name: team.name ?? "(Untitled team)",
+    workspaceGid: team.organization?.gid ?? team.workspace?.gid ?? undefined,
+    workspaceName: team.organization?.name ?? team.workspace?.name ?? undefined
+  };
+}
+
 function normalizeProject(project: any): AsanaProjectSummary {
   return {
     gid: project.gid ?? "",
     name: project.name ?? "(Untitled project)",
     workspaceGid: project.workspace?.gid ?? undefined,
     workspaceName: project.workspace?.name ?? undefined,
+    teamGid: project.team?.gid ?? undefined,
+    teamName: project.team?.name ?? undefined,
     archived: project.archived ?? undefined
   };
 }
@@ -93,6 +117,12 @@ function dueTimestamp(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">): number {
   return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
 }
 
+function dueDate(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">): string | undefined {
+  if (task.dueOn) return task.dueOn;
+  if (task.dueAt) return task.dueAt.slice(0, 10);
+  return undefined;
+}
+
 function beforeDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueBefore?: string): boolean {
   if (!dueBefore) return true;
   const filterTimestamp =
@@ -103,15 +133,37 @@ function beforeDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueBefore?: 
   return dueTimestamp(task) <= filterTimestamp;
 }
 
+function matchesDueDate(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueOn?: string): boolean {
+  if (!dueOn) return true;
+  return dueDate(task) === dueOn;
+}
+
 function sortByName<T extends { name: string }>(items: T[]): T[] {
   return items.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function completedSinceForSelection(completed?: boolean): string {
+  return completed === true ? COMPLETED_SINCE_ALL : "now";
+}
+
+function filterTasks(
+  tasks: AsanaTaskSummary[],
+  input: { completed?: boolean; dueBefore?: string; dueOn?: string; limit?: number }
+): AsanaTaskSummary[] {
+  const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+
+  return tasks
+    .filter((task) => (input.completed === undefined ? true : task.completed === input.completed))
+    .filter((task) => matchesDueDate(task, input.dueOn))
+    .filter((task) => beforeDue(task, input.dueBefore))
+    .slice(0, limit);
 }
 
 export class AsanaService {
   constructor(private readonly accessToken: string) {}
 
   async listWorkspaces(): Promise<AsanaWorkspaceSummary[]> {
-    const data = await this.request<any[]>("/workspaces", {
+    const data = await this.requestCollection<any>("/workspaces", {
       query: {
         limit: "100",
         opt_fields: WORKSPACE_FIELDS
@@ -121,23 +173,75 @@ export class AsanaService {
     return sortByName(data.map(normalizeWorkspace).filter((workspace) => workspace.gid));
   }
 
-  async listProjects(workspaceGid: string, query?: string): Promise<AsanaProjectSummary[]> {
-    const data = await this.request<any[]>(`/workspaces/${workspaceGid}/projects`, {
+  async listTeams(workspaceGid: string, query?: string): Promise<AsanaTeamSummary[]> {
+    const data = await this.requestCollection<any>(`/workspaces/${workspaceGid}/teams`, {
       query: {
         limit: "100",
-        opt_fields: PROJECT_FIELDS
+        opt_fields: TEAM_FIELDS
       }
     });
 
     return sortByName(
-      data
-        .map(normalizeProject)
-        .filter((project) => project.gid && matchesNameQuery(project.name, query))
+      data.map(normalizeTeam).filter((team) => team.gid && matchesNameQuery(team.name, query))
     );
   }
 
+  async listProjects(workspaceGid: string, query?: string): Promise<AsanaProjectSummary[]> {
+    const [workspaceProjects, teams] = await Promise.all([
+      this.requestCollection<any>(`/workspaces/${workspaceGid}/projects`, {
+        query: {
+          limit: "100",
+          opt_fields: PROJECT_FIELDS
+        }
+      }),
+      this.listTeams(workspaceGid)
+    ]);
+
+    const teamProjectResponses = await Promise.allSettled(
+      teams.map((team) =>
+        this.requestCollection<any>(`/teams/${team.gid}/projects`, {
+          query: {
+            limit: "100",
+            opt_fields: PROJECT_FIELDS
+          }
+        })
+      )
+    );
+
+    const projectMap = new Map<string, AsanaProjectSummary>();
+
+    const remember = (project: AsanaProjectSummary, fallbackTeam?: AsanaTeamSummary) => {
+      if (!project.gid || !matchesNameQuery(project.name, query)) return;
+
+      const existing = projectMap.get(project.gid);
+      projectMap.set(project.gid, {
+        ...existing,
+        ...project,
+        teamGid: project.teamGid ?? existing?.teamGid ?? fallbackTeam?.gid,
+        teamName: project.teamName ?? existing?.teamName ?? fallbackTeam?.name,
+        workspaceGid: project.workspaceGid ?? existing?.workspaceGid ?? fallbackTeam?.workspaceGid,
+        workspaceName:
+          project.workspaceName ?? existing?.workspaceName ?? fallbackTeam?.workspaceName
+      });
+    };
+
+    for (const project of workspaceProjects.map(normalizeProject)) {
+      remember(project);
+    }
+
+    teamProjectResponses.forEach((result, index) => {
+      if (result.status !== "fulfilled") return;
+      const fallbackTeam = teams[index];
+      for (const project of result.value.map(normalizeProject)) {
+        remember(project, fallbackTeam);
+      }
+    });
+
+    return sortByName(Array.from(projectMap.values()));
+  }
+
   async listUsers(workspaceGid: string, query?: string): Promise<AsanaUserSummary[]> {
-    const data = await this.request<any[]>(`/workspaces/${workspaceGid}/users`, {
+    const data = await this.requestCollection<any>(`/workspaces/${workspaceGid}/users`, {
       query: {
         limit: "100",
         opt_fields: USER_FIELDS
@@ -150,33 +254,17 @@ export class AsanaService {
   }
 
   async listMyTasks(input: {
-    workspaceGid?: string;
-    projectGid?: string;
+    workspaceGid: string;
     completed?: boolean;
     dueBefore?: string;
+    dueOn?: string;
     limit?: number;
   }): Promise<AsanaTaskSummary[]> {
-    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
-    const pageSize = Math.min(Math.max(limit * 3, 25), 100);
+    const fetchLimit = Math.min(Math.max((input.limit ?? 20) * 5, 50), MAX_COLLECTION_ITEMS);
+    const pageSize = Math.min(fetchLimit, 100);
+    const completedSince = completedSinceForSelection(input.completed);
 
-    let data: any[];
-    if (input.projectGid) {
-      data = await this.request<any[]>(`/projects/${input.projectGid}/tasks`, {
-        query: {
-          limit: String(pageSize),
-          opt_fields: TASK_FIELDS,
-          completed_since: input.completed === false ? "now" : undefined
-        }
-      });
-    } else {
-      if (!input.workspaceGid) {
-        throw new UserFacingError(
-          "Missing Asana workspace",
-          "ASANA_WORKSPACE_REQUIRED",
-          "Choose an Asana workspace first."
-        );
-      }
-
+    try {
       const userTaskList = await this.request<{ gid?: string }>("/users/me/user_task_list", {
         query: {
           workspace: input.workspaceGid,
@@ -185,24 +273,63 @@ export class AsanaService {
       });
 
       if (!userTaskList.gid) {
-        throw new Error("Asana did not return a user task list ID");
+        throw new UserFacingError(
+          "Asana user task list missing",
+          "ASANA_MY_TASKS_UNAVAILABLE",
+          "I couldn't read Asana My Tasks for that workspace. Ask me to check a project instead."
+        );
       }
 
-      data = await this.request<any[]>(`/user_task_lists/${userTaskList.gid}/tasks`, {
+      const data = await this.requestCollection<any>(`/user_task_lists/${userTaskList.gid}/tasks`, {
         query: {
           limit: String(pageSize),
           opt_fields: TASK_FIELDS,
-          completed_since: input.completed === false ? "now" : undefined
+          completed_since: completedSince
         }
+      }, {
+        maxItems: fetchLimit
       });
-    }
 
-    return data
-      .map(normalizeTask)
-      .filter((task) => task.gid)
-      .filter((task) => (input.completed === undefined ? true : task.completed === input.completed))
-      .filter((task) => beforeDue(task, input.dueBefore))
-      .slice(0, limit);
+      return filterTasks(data.map(normalizeTask).filter((task) => task.gid), input);
+    } catch (error) {
+      if (!this.shouldFallbackToWorkspaceTaskList(error)) throw error;
+
+      const fallbackData = await this.requestCollection<any>("/tasks", {
+        query: {
+          assignee: "me",
+          workspace: input.workspaceGid,
+          limit: String(pageSize),
+          completed_since: completedSince,
+          opt_fields: TASK_FIELDS
+        }
+      }, {
+        maxItems: fetchLimit
+      });
+
+      return filterTasks(fallbackData.map(normalizeTask).filter((task) => task.gid), input);
+    }
+  }
+
+  async listProjectTasks(input: {
+    projectGid: string;
+    completed?: boolean;
+    dueBefore?: string;
+    dueOn?: string;
+    limit?: number;
+  }): Promise<AsanaTaskSummary[]> {
+    const fetchLimit = Math.min(Math.max((input.limit ?? 20) * 5, 50), MAX_COLLECTION_ITEMS);
+    const pageSize = Math.min(fetchLimit, 100);
+    const data = await this.requestCollection<any>(`/projects/${input.projectGid}/tasks`, {
+      query: {
+        limit: String(pageSize),
+        opt_fields: TASK_FIELDS,
+        completed_since: completedSinceForSelection(input.completed)
+      }
+    }, {
+      maxItems: fetchLimit
+    });
+
+    return filterTasks(data.map(normalizeTask).filter((task) => task.gid), input);
   }
 
   async searchTasks(input: {
@@ -214,7 +341,7 @@ export class AsanaService {
     limit?: number;
   }): Promise<AsanaTaskSummary[]> {
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
-    const data = await this.request<any[]>(`/workspaces/${input.workspaceGid}/tasks/search`, {
+    const data = await this.requestCollection<any>(`/workspaces/${input.workspaceGid}/tasks/search`, {
       query: {
         text: input.text,
         "projects.any": input.projectGid,
@@ -224,6 +351,8 @@ export class AsanaService {
         sort_by: "modified_at",
         opt_fields: TASK_FIELDS
       }
+    }, {
+      maxItems: limit
     });
 
     return data.map(normalizeTask).filter((task) => task.gid);
@@ -316,6 +445,55 @@ export class AsanaService {
     };
   }
 
+  private shouldFallbackToWorkspaceTaskList(error: unknown): boolean {
+    return (
+      error instanceof UserFacingError &&
+      [
+        "ASANA_BAD_REQUEST",
+        "ASANA_FORBIDDEN",
+        "ASANA_MY_TASKS_UNAVAILABLE",
+        "ASANA_NOT_FOUND"
+      ].includes(error.code)
+    );
+  }
+
+  private async requestCollection<T>(
+    path: string,
+    input: {
+      method?: "GET" | "POST" | "PUT" | "DELETE";
+      query?: Record<string, string | undefined>;
+      body?: unknown;
+    } = {},
+    options: {
+      maxItems?: number;
+    } = {}
+  ): Promise<T[]> {
+    const items: T[] = [];
+    let offset: string | undefined;
+    let pages = 0;
+
+    do {
+      const query = {
+        ...(input.query ?? {}),
+        ...(offset ? { offset } : {})
+      };
+      const result = await this.executeRequest<T[]>(path, {
+        ...input,
+        query
+      });
+
+      items.push(...(result.data ?? []));
+      offset = result.nextPageOffset;
+      pages += 1;
+    } while (
+      offset &&
+      items.length < (options.maxItems ?? MAX_COLLECTION_ITEMS) &&
+      pages < MAX_COLLECTION_PAGES
+    );
+
+    return items.slice(0, options.maxItems ?? MAX_COLLECTION_ITEMS);
+  }
+
   private async request<T>(
     path: string,
     input: {
@@ -324,6 +502,23 @@ export class AsanaService {
       body?: unknown;
     } = {}
   ): Promise<T> {
+    const result = await this.executeRequest<T>(path, input);
+
+    if (result.data === undefined && input.method !== "DELETE") {
+      throw new Error(`Asana response missing data for ${path}`);
+    }
+
+    return (result.data ?? {}) as T;
+  }
+
+  private async executeRequest<T>(
+    path: string,
+    input: {
+      method?: "GET" | "POST" | "PUT" | "DELETE";
+      query?: Record<string, string | undefined>;
+      body?: unknown;
+    } = {}
+  ): Promise<{ data?: T; nextPageOffset?: string }> {
     const url = new URL(`${ASANA_API_BASE_URL}${path}`);
     for (const [key, value] of Object.entries(input.query ?? {})) {
       if (value !== undefined) {
@@ -344,20 +539,38 @@ export class AsanaService {
     const payload = (await response.json().catch(() => ({}))) as {
       data?: T;
       errors?: Array<{ message?: string }>;
+      next_page?: { offset?: string | null };
     };
 
     if (!response.ok) {
       throw this.mapError(response.status, path, payload.errors?.[0]?.message);
     }
 
-    if (payload.data === undefined && input.method !== "DELETE") {
-      throw new Error(`Asana response missing data for ${path}`);
-    }
-
-    return (payload.data ?? {}) as T;
+    return {
+      data: payload.data,
+      nextPageOffset: payload.next_page?.offset ?? undefined
+    };
   }
 
   private mapError(status: number, path: string, detail?: string): Error {
+    if (status === 400 && path.includes("/users/me/user_task_list")) {
+      return new UserFacingError(
+        "Asana My Tasks unavailable",
+        "ASANA_MY_TASKS_UNAVAILABLE",
+        "I couldn't read Asana My Tasks for that workspace. Ask me to check a project instead."
+      );
+    }
+
+    if (status === 400) {
+      return new UserFacingError(
+        "Asana rejected request",
+        "ASANA_BAD_REQUEST",
+        detail
+          ? `Asana rejected that request: ${detail}`
+          : "Asana rejected that request. Try a simpler project, task, or workspace request."
+      );
+    }
+
     if (status === 401) {
       return new UserFacingError(
         "Asana auth expired",
@@ -386,7 +599,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana permission denied",
         "ASANA_FORBIDDEN",
-        "Your Asana account does not have access to that workspace, project, or task."
+        "Your Asana account does not have access to that workspace, project, team, or task."
       );
     }
 
@@ -394,7 +607,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana resource not found",
         "ASANA_NOT_FOUND",
-        "I couldn't find that Asana task, project, or workspace."
+        "I couldn't find that Asana task, project, team, or workspace."
       );
     }
 

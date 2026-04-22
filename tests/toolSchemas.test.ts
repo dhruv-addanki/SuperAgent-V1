@@ -32,9 +32,11 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "calendar_list_events")).toBe(true);
     expect(tools.some((tool) => tool.name === "docs_read_document")).toBe(true);
     expect(tools.some((tool) => tool.name === "asana_list_my_tasks")).toBe(true);
+    expect(tools.some((tool) => tool.name === "asana_list_teams")).toBe(true);
+    expect(tools.some((tool) => tool.name === "asana_list_project_tasks")).toBe(true);
   });
 
-  it("validates Asana task update inputs", () => {
+  it("validates Asana task inputs", () => {
     expect(() =>
       toolInputSchemas.asana_update_task.parse({
         taskGid: "123",
@@ -55,5 +57,13 @@ describe("tool schemas", () => {
         taskGid: "123"
       }).taskGid
     ).toBe("123");
+
+    expect(
+      toolInputSchemas.asana_list_project_tasks.parse({
+        projectGid: "project_1",
+        dueOn: "2026-04-22",
+        limit: 5
+      }).dueOn
+    ).toBe("2026-04-22");
   });
 });

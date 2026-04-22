@@ -9,7 +9,16 @@ export interface AsanaProjectSummary {
   name: string;
   workspaceGid?: string;
   workspaceName?: string;
+  teamGid?: string;
+  teamName?: string;
   archived?: boolean;
+}
+
+export interface AsanaTeamSummary {
+  gid: string;
+  name: string;
+  workspaceGid?: string;
+  workspaceName?: string;
 }
 
 export interface AsanaUserSummary {

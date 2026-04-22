@@ -9,7 +9,7 @@ import { env } from "../../config/env";
 import { AuditService } from "../audit/auditService";
 import { AsanaService } from "../asana/asanaService";
 import { AsanaTokenService } from "../asana/tokenService";
-import type { AsanaTaskSummary } from "../asana/asanaTypes";
+import type { AsanaTaskSummary, AsanaTeamSummary } from "../asana/asanaTypes";
 import { CalendarService } from "../google/calendarService";
 import { DocsService } from "../google/docsService";
 import { DriveService } from "../google/driveService";
@@ -168,6 +168,97 @@ export class ToolExecutor {
         confidence: 1
       }
     });
+  }
+
+  private async rememberRecentAsanaProjects(
+    userId: string,
+    projects: Array<{
+      gid: string;
+      name?: string;
+      workspaceGid?: string;
+      workspaceName?: string;
+      teamGid?: string;
+      teamName?: string;
+    }>
+  ): Promise<void> {
+    const normalizedProjects = Array.from(
+      new Map(
+        projects
+          .filter((project) => project.gid)
+          .slice(0, 20)
+          .map((project) => [
+            project.gid,
+            {
+              projectGid: project.gid,
+              name: project.name ?? "(Untitled project)",
+              workspaceGid: project.workspaceGid,
+              workspaceName: project.workspaceName,
+              teamGid: project.teamGid,
+              teamName: project.teamName
+            }
+          ])
+      ).values()
+    );
+
+    if (!normalizedProjects.length) return;
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_asana_projects" } },
+      update: {
+        value: normalizedProjects,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_asana_projects",
+        value: normalizedProjects,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentAsanaTeams(
+    userId: string,
+    teams: AsanaTeamSummary[]
+  ): Promise<void> {
+    const normalizedTeams = teams.slice(0, 20).map((team) => ({
+      teamGid: team.gid,
+      name: team.name,
+      workspaceGid: team.workspaceGid,
+      workspaceName: team.workspaceName
+    }));
+
+    if (!normalizedTeams.length) return;
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_asana_teams" } },
+      update: {
+        value: normalizedTeams,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_asana_teams",
+        value: normalizedTeams,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentAsanaProjectsFromTasks(
+    userId: string,
+    tasks: AsanaTaskSummary[]
+  ): Promise<void> {
+    const projects = tasks.flatMap((task) =>
+      (task.projects ?? []).map((project) => ({
+        gid: project.gid,
+        name: project.name,
+        workspaceGid: task.workspaceGid,
+        workspaceName: task.workspaceName
+      }))
+    );
+
+    await this.rememberRecentAsanaProjects(userId, projects);
   }
 
   private async getRecentAsanaWorkspace(userId: string): Promise<string | null> {
@@ -353,9 +444,13 @@ export class ToolExecutor {
             toolName === "asana_list_workspaces"
               ? ["workspaces:read"]
               : toolName === "asana_list_projects"
-                ? ["projects:read", "workspaces:read"]
+                ? ["projects:read", "workspaces:read", "teams:read"]
+                : toolName === "asana_list_teams"
+                  ? ["teams:read", "workspaces:read"]
                 : toolName === "asana_list_users"
                   ? ["users:read", "workspaces:read"]
+                  : toolName === "asana_list_project_tasks"
+                    ? ["tasks:read", "projects:read"]
                   : toolName === "asana_delete_task"
                     ? ["tasks:delete", "tasks:read"]
                   : toolName === "asana_create_task" || toolName === "asana_update_task"
@@ -388,6 +483,34 @@ export class ToolExecutor {
             workspaceGid: input.workspaceGid
           });
           const data = await service.listProjects(input.workspaceGid, input.query);
+          await this.rememberRecentAsanaProjects(context.user.id, data);
+          await this.rememberRecentAsanaTeams(
+            context.user.id,
+            Array.from(
+              new Map(
+                data
+                  .filter((project) => project.teamGid)
+                  .map((project) => [
+                    project.teamGid!,
+                    {
+                      gid: project.teamGid!,
+                      name: project.teamName ?? "(Untitled team)",
+                      workspaceGid: project.workspaceGid,
+                      workspaceName: project.workspaceName
+                    } satisfies AsanaTeamSummary
+                  ])
+              ).values()
+            )
+          );
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_list_teams") {
+          await this.rememberRecentAsanaWorkspace(context.user.id, {
+            workspaceGid: input.workspaceGid
+          });
+          const data = await service.listTeams(input.workspaceGid, input.query);
+          await this.rememberRecentAsanaTeams(context.user.id, data);
           return { ok: true, data };
         }
 
@@ -403,16 +526,44 @@ export class ToolExecutor {
           const workspaceGid = input.projectGid
             ? undefined
             : await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid);
-          const data = await service.listMyTasks({
-            ...input,
-            workspaceGid
-          });
+          const data = input.projectGid
+            ? await service.listProjectTasks({
+                projectGid: input.projectGid,
+                completed: input.completed,
+                dueOn: input.dueOn,
+                dueBefore: input.dueBefore,
+                limit: input.limit
+              })
+            : await service.listMyTasks({
+                workspaceGid: workspaceGid!,
+                completed: input.completed,
+                dueOn: input.dueOn,
+                dueBefore: input.dueBefore,
+                limit: input.limit
+              });
           if (workspaceGid) {
             await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });
           }
           if (data.length) {
             const firstTask = data[0];
             await this.rememberRecentAsanaTasks(context.user.id, data);
+            await this.rememberRecentAsanaProjectsFromTasks(context.user.id, data);
+            if (firstTask?.workspaceGid) {
+              await this.rememberRecentAsanaWorkspace(context.user.id, {
+                workspaceGid: firstTask.workspaceGid,
+                name: firstTask.workspaceName
+              });
+            }
+          }
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_list_project_tasks") {
+          const data = await service.listProjectTasks(input);
+          if (data.length) {
+            const firstTask = data[0];
+            await this.rememberRecentAsanaTasks(context.user.id, data);
+            await this.rememberRecentAsanaProjectsFromTasks(context.user.id, data);
             if (firstTask?.workspaceGid) {
               await this.rememberRecentAsanaWorkspace(context.user.id, {
                 workspaceGid: firstTask.workspaceGid,
@@ -436,6 +587,7 @@ export class ToolExecutor {
           await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });
           if (data.length) {
             await this.rememberRecentAsanaTasks(context.user.id, data);
+            await this.rememberRecentAsanaProjectsFromTasks(context.user.id, data);
           }
           return { ok: true, data };
         }
@@ -443,6 +595,7 @@ export class ToolExecutor {
         if (toolName === "asana_get_task") {
           const data = await service.getTask(input.taskGid);
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
+          await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           if (data.workspaceGid) {
             await this.rememberRecentAsanaWorkspace(context.user.id, {
               workspaceGid: data.workspaceGid,
@@ -462,6 +615,7 @@ export class ToolExecutor {
             workspaceGid
           });
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
+          await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           const rememberedWorkspaceGid = data.workspaceGid ?? workspaceGid;
           if (rememberedWorkspaceGid) {
             await this.rememberRecentAsanaWorkspace(context.user.id, {
@@ -483,6 +637,7 @@ export class ToolExecutor {
         if (toolName === "asana_update_task") {
           const data = await service.updateTask(input);
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
+          await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           if (data.workspaceGid) {
             await this.rememberRecentAsanaWorkspace(context.user.id, {
               workspaceGid: data.workspaceGid,

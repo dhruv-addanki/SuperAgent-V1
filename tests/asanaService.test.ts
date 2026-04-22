@@ -33,6 +33,86 @@ describe("asana service", () => {
     ]);
   });
 
+  it("aggregates workspace projects with team projects and dedupes them", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) => {
+      const value = url.toString();
+
+      if (value.includes("/workspaces/workspace_1/projects") && value.includes("offset=page_2")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ gid: "project_2", name: "Scanis" }]
+          })
+        };
+      }
+
+      if (value.includes("/workspaces/workspace_1/projects")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ gid: "project_1", name: "AI Learning" }],
+            next_page: { offset: "page_2" }
+          })
+        };
+      }
+
+      if (value.includes("/workspaces/workspace_1/teams")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ gid: "team_1", name: "Growth", organization: { gid: "workspace_1" } }]
+          })
+        };
+      }
+
+      if (value.includes("/teams/team_1/projects")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { gid: "project_2", name: "Scanis" },
+              { gid: "project_3", name: "Content" }
+            ]
+          })
+        };
+      }
+
+      throw new Error(`Unexpected URL ${value}`);
+    });
+
+    const projects = await new AsanaService("token").listProjects("workspace_1");
+
+    expect(projects).toEqual([
+      {
+        gid: "project_1",
+        name: "AI Learning",
+        workspaceGid: undefined,
+        workspaceName: undefined,
+        teamGid: undefined,
+        teamName: undefined,
+        archived: undefined
+      },
+      {
+        gid: "project_3",
+        name: "Content",
+        workspaceGid: "workspace_1",
+        workspaceName: undefined,
+        teamGid: "team_1",
+        teamName: "Growth",
+        archived: undefined
+      },
+      {
+        gid: "project_2",
+        name: "Scanis",
+        workspaceGid: "workspace_1",
+        workspaceName: undefined,
+        teamGid: "team_1",
+        teamName: "Growth",
+        archived: undefined
+      }
+    ]);
+  });
+
   it("lists my tasks through the user task list endpoint and filters by completion and due date", async () => {
     fetchMock
       .mockResolvedValueOnce({
@@ -62,6 +142,61 @@ describe("asana service", () => {
     expect(fetchMock.mock.calls[1][0].toString()).toContain("/user_task_lists/utl_1/tasks");
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ gid: "task_1", name: "Due soon" });
+  });
+
+  it("falls back to a workspace task query when My Tasks is unavailable", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ errors: [{ message: "user task list unavailable" }] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            { gid: "task_1", name: "Today", completed: false, due_on: "2026-04-22" },
+            { gid: "task_2", name: "Later", completed: false, due_on: "2026-04-23" }
+          ]
+        })
+      });
+
+    const tasks = await new AsanaService("token").listMyTasks({
+      workspaceGid: "workspace_1",
+      dueOn: "2026-04-22",
+      completed: false
+    });
+
+    expect(fetchMock.mock.calls[0][0].toString()).toContain("/users/me/user_task_list");
+    expect(fetchMock.mock.calls[1][0].toString()).toContain("/tasks?");
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        gid: "task_1",
+        name: "Today",
+        dueOn: "2026-04-22"
+      })
+    ]);
+  });
+
+  it("lists project tasks with due date filtering", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { gid: "task_1", name: "Today", completed: false, due_on: "2026-04-22" },
+          { gid: "task_2", name: "Tomorrow", completed: false, due_on: "2026-04-23" }
+        ]
+      })
+    });
+
+    const tasks = await new AsanaService("token").listProjectTasks({
+      projectGid: "project_1",
+      dueOn: "2026-04-22"
+    });
+
+    expect(fetchMock.mock.calls[0][0].toString()).toContain("/projects/project_1/tasks");
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ gid: "task_1", name: "Today" });
   });
 
   it("maps expired auth failures", async () => {
