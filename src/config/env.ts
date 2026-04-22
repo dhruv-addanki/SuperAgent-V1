@@ -19,6 +19,11 @@ const envSchema = z
       .string()
       .min(1)
       .default("postgresql://postgres:postgres@localhost:5432/whatsapp_super_agent?schema=public"),
+    DIRECT_URL: z
+      .string()
+      .min(1)
+      .optional()
+      .default("postgresql://postgres:postgres@localhost:5432/whatsapp_super_agent?schema=public"),
     REDIS_URL: z.string().min(1).default("redis://localhost:6379"),
 
     OPENAI_API_KEY: z.string().min(1).default("dev-openai-key"),
