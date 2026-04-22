@@ -9,11 +9,13 @@ import { createOpenAIClient, type ResponsesClient } from "../lib/openaiClient";
 import { userMessageForError } from "../lib/errors";
 import { prisma as defaultPrisma } from "../modules/db/prisma";
 import { AgentOrchestrator } from "../modules/agent/agentOrchestrator";
+import { AsanaOAuthService } from "../modules/asana/asanaOAuthService";
 import { GoogleOAuthService } from "../modules/google/googleOAuthService";
 import { WhatsAppService } from "../modules/whatsapp/whatsappService";
 import { createWhatsAppInboundQueue, type InboundWhatsAppJobData } from "../modules/queue/queue";
 import { registerWhatsappWorker } from "../modules/queue/jobs";
 import { registerHealthRoutes } from "../routes/health";
+import { registerAsanaAuthRoutes } from "../routes/authAsana";
 import { registerGoogleAuthRoutes } from "../routes/authGoogle";
 import { registerWhatsAppWebhookRoutes } from "../routes/whatsappWebhook";
 
@@ -22,6 +24,7 @@ export interface BuildAppOptions {
   responsesClient?: ResponsesClient;
   whatsappService?: WhatsAppService;
   googleOAuthService?: GoogleOAuthService;
+  asanaOAuthService?: AsanaOAuthService;
   queue?: Queue<InboundWhatsAppJobData> | null;
   startWorkers?: boolean;
 }
@@ -43,6 +46,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const whatsappService = options.whatsappService ?? new WhatsAppService();
   const agent = new AgentOrchestrator(prisma, responsesClient, whatsappService);
   const googleOAuthService = options.googleOAuthService ?? new GoogleOAuthService(prisma);
+  const asanaOAuthService = options.asanaOAuthService ?? new AsanaOAuthService(prisma);
   const queue =
     options.queue === null
       ? undefined
@@ -66,6 +70,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await registerHealthRoutes(app);
   await registerGoogleAuthRoutes(app, googleOAuthService);
+  await registerAsanaAuthRoutes(app, asanaOAuthService);
   await registerWhatsAppWebhookRoutes(app, { agent, queue });
 
   app.addHook("onClose", async () => {

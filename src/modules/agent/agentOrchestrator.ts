@@ -10,6 +10,7 @@ import { logger } from "../../config/logger";
 import type { ResponsesClient } from "../../lib/openaiClient";
 import { userMessageForError } from "../../lib/errors";
 import { WhatsAppService } from "../whatsapp/whatsappService";
+import { AsanaTokenService } from "../asana/tokenService";
 import { GoogleTokenService } from "../google/tokenService";
 import { LongTermMemory } from "../memory/longTermMemory";
 import { ShortTermMemory } from "../memory/shortTermMemory";
@@ -40,7 +41,6 @@ export interface InboundWhatsAppTextInput {
 }
 
 export class AgentOrchestrator {
-  private readonly tokenService: GoogleTokenService;
   private readonly toolExecutor: ToolExecutor;
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
@@ -50,8 +50,9 @@ export class AgentOrchestrator {
     private readonly responsesClient: ResponsesClient,
     private readonly whatsappService: WhatsAppService
   ) {
-    this.tokenService = new GoogleTokenService(prisma);
-    this.toolExecutor = new ToolExecutor(prisma, this.tokenService);
+    const googleTokenService = new GoogleTokenService(prisma);
+    const asanaTokenService = new AsanaTokenService(prisma);
+    this.toolExecutor = new ToolExecutor(prisma, googleTokenService, asanaTokenService);
     this.shortTermMemory = new ShortTermMemory(prisma);
     this.longTermMemory = new LongTermMemory(prisma);
   }
@@ -90,16 +91,6 @@ export class AgentOrchestrator {
           latestUserMessage: input.text
         });
         if (handled) return;
-      }
-
-      const hasGoogle = await this.tokenService.hasConnectedGoogle(user.id);
-      if (!hasGoogle) {
-        await this.reply(
-          conversation.id,
-          input.from,
-          `Connect your Google account first: ${this.tokenService.getConnectUrl(user.whatsappPhone)}`
-        );
-        return;
       }
 
       const genericCalendarOverview = matchGenericCalendarOverviewRequest(input.text);
@@ -149,7 +140,7 @@ export class AgentOrchestrator {
         timezone: user.timezone,
         memory,
         pendingContext: buildPendingActionContext(pendingAction),
-        readOnlyMode: env.GOOGLE_READ_ONLY_MODE,
+        readOnlyMode: env.READ_ONLY_MODE,
         nowIso: new Date().toISOString()
       });
 

@@ -62,8 +62,8 @@ export function userClearlyRequestedCalendarWrite(text: string): boolean {
 
 export function getApprovalDecision(
   toolName: ToolName,
-  input: unknown,
-  latestUserMessage: string
+  _input: unknown,
+  _latestUserMessage: string
 ): ApprovalDecision {
   if (toolName === "gmail_send_draft") {
     return {
@@ -200,5 +200,5 @@ export function buildPendingActionContext(pendingAction: PendingAction | null): 
 }
 
 export function isReadOnlyModeWriteBlocked(): boolean {
-  return env.GOOGLE_READ_ONLY_MODE;
+  return env.READ_ONLY_MODE;
 }

@@ -7,6 +7,9 @@ import {
 } from "@prisma/client";
 import { env } from "../../config/env";
 import { AuditService } from "../audit/auditService";
+import { AsanaService } from "../asana/asanaService";
+import { AsanaTokenService } from "../asana/tokenService";
+import type { AsanaTaskSummary } from "../asana/asanaTypes";
 import { CalendarService } from "../google/calendarService";
 import { DocsService } from "../google/docsService";
 import { DriveService } from "../google/driveService";
@@ -26,7 +29,7 @@ import {
   toolInputSchemas,
   type ToolName
 } from "../../schemas/toolSchemas";
-import { serializeError, userMessageForError } from "../../lib/errors";
+import { serializeError, UserFacingError, userMessageForError } from "../../lib/errors";
 import { formatForUser } from "../../lib/time";
 import type { GmailThreadSummary } from "../google/googleTypes";
 
@@ -50,7 +53,8 @@ export class ToolExecutor {
 
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly tokenService: GoogleTokenService
+    private readonly googleTokenService: GoogleTokenService,
+    private readonly asanaTokenService: AsanaTokenService
   ) {
     this.audit = new AuditService(prisma);
   }
@@ -109,6 +113,116 @@ export class ToolExecutor {
     });
   }
 
+  private async rememberRecentAsanaWorkspace(
+    userId: string,
+    workspace: { workspaceGid: string; name?: string }
+  ): Promise<void> {
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_asana_workspace" } },
+      update: {
+        value: {
+          workspaceGid: workspace.workspaceGid,
+          name: workspace.name
+        },
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_asana_workspace",
+        value: {
+          workspaceGid: workspace.workspaceGid,
+          name: workspace.name
+        },
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentAsanaTasks(
+    userId: string,
+    tasks: AsanaTaskSummary[]
+  ): Promise<void> {
+    const normalizedTasks = tasks.slice(0, 10).map((task) => ({
+      taskGid: task.gid,
+      name: task.name,
+      completed: task.completed,
+      dueOn: task.dueOn,
+      dueAt: task.dueAt,
+      assigneeGid: task.assigneeGid,
+      assigneeName: task.assigneeName,
+      workspaceGid: task.workspaceGid,
+      workspaceName: task.workspaceName,
+      permalinkUrl: task.permalinkUrl
+    }));
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_asana_tasks" } },
+      update: {
+        value: normalizedTasks,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_asana_tasks",
+        value: normalizedTasks,
+        confidence: 1
+      }
+    });
+  }
+
+  private async getRecentAsanaWorkspace(userId: string): Promise<string | null> {
+    const entry = await this.prisma.memoryEntry.findUnique({
+      where: { userId_key: { userId, key: "recent_asana_workspace" } }
+    });
+
+    const workspaceGid =
+      entry?.value &&
+      typeof entry.value === "object" &&
+      typeof (entry.value as { workspaceGid?: unknown }).workspaceGid === "string"
+        ? (entry.value as { workspaceGid: string }).workspaceGid
+        : null;
+
+    return workspaceGid;
+  }
+
+  private async resolveAsanaWorkspace(
+    userId: string,
+    service: AsanaService,
+    requestedWorkspaceGid?: string
+  ): Promise<string> {
+    if (requestedWorkspaceGid) {
+      await this.rememberRecentAsanaWorkspace(userId, { workspaceGid: requestedWorkspaceGid });
+      return requestedWorkspaceGid;
+    }
+
+    const recentWorkspace = await this.getRecentAsanaWorkspace(userId);
+    if (recentWorkspace) return recentWorkspace;
+
+    const workspaces = await service.listWorkspaces();
+    if (workspaces.length === 1) {
+      const workspace = workspaces[0];
+      await this.rememberRecentAsanaWorkspace(userId, {
+        workspaceGid: workspace!.gid,
+        name: workspace!.name
+      });
+      return workspace!.gid;
+    }
+
+    if (!workspaces.length) {
+      throw new UserFacingError(
+        "No Asana workspaces found",
+        "ASANA_NO_WORKSPACES",
+        "I couldn't find any Asana workspaces on the connected account."
+      );
+    }
+
+    throw new UserFacingError(
+      "Asana workspace selection required",
+      "ASANA_WORKSPACE_SELECTION_REQUIRED",
+      "You have multiple Asana workspaces. Ask me to list Asana workspaces and pick one."
+    );
+  }
+
   async executeToolCall(
     toolNameValue: string,
     rawInput: unknown,
@@ -126,7 +240,7 @@ export class ToolExecutor {
     const toolName = toolNameValue;
     const parsedInput = this.validateInput(toolName, rawInput);
 
-    if (env.GOOGLE_READ_ONLY_MODE && isWriteTool(toolName)) {
+    if (env.READ_ONLY_MODE && isWriteTool(toolName)) {
       await this.audit.log({
         userId: context.user.id,
         actionType: "write_blocked_read_only",
@@ -233,7 +347,174 @@ export class ToolExecutor {
         return { ok: true, data };
       }
 
-      const auth = await this.tokenService.getOAuthClientForUser(context.user, {
+      if (toolName.startsWith("asana_")) {
+        const accessToken = await this.asanaTokenService.getAccessTokenForUser(context.user, {
+          requiredScopes:
+            toolName === "asana_list_workspaces"
+              ? ["workspaces:read"]
+              : toolName === "asana_list_projects"
+                ? ["projects:read", "workspaces:read"]
+                : toolName === "asana_list_users"
+                  ? ["users:read", "workspaces:read"]
+                  : toolName === "asana_delete_task"
+                    ? ["tasks:delete", "tasks:read"]
+                  : toolName === "asana_create_task" || toolName === "asana_update_task"
+                    ? ["tasks:write"]
+                    : ["tasks:read"],
+          reconnectReason:
+            toolName === "asana_create_task" ||
+            toolName === "asana_update_task" ||
+            toolName === "asana_delete_task"
+              ? "Reconnect your Asana account to manage tasks"
+              : "Reconnect your Asana account to read tasks"
+        });
+
+        const service = new AsanaService(accessToken);
+
+        if (toolName === "asana_list_workspaces") {
+          const data = await service.listWorkspaces();
+          if (data.length === 1) {
+            const workspace = data[0];
+            await this.rememberRecentAsanaWorkspace(context.user.id, {
+              workspaceGid: workspace!.gid,
+              name: workspace!.name
+            });
+          }
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_list_projects") {
+          await this.rememberRecentAsanaWorkspace(context.user.id, {
+            workspaceGid: input.workspaceGid
+          });
+          const data = await service.listProjects(input.workspaceGid, input.query);
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_list_users") {
+          await this.rememberRecentAsanaWorkspace(context.user.id, {
+            workspaceGid: input.workspaceGid
+          });
+          const data = await service.listUsers(input.workspaceGid, input.query);
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_list_my_tasks") {
+          const workspaceGid = input.projectGid
+            ? undefined
+            : await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid);
+          const data = await service.listMyTasks({
+            ...input,
+            workspaceGid
+          });
+          if (workspaceGid) {
+            await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });
+          }
+          if (data.length) {
+            const firstTask = data[0];
+            await this.rememberRecentAsanaTasks(context.user.id, data);
+            if (firstTask?.workspaceGid) {
+              await this.rememberRecentAsanaWorkspace(context.user.id, {
+                workspaceGid: firstTask.workspaceGid,
+                name: firstTask.workspaceName
+              });
+            }
+          }
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_search_tasks") {
+          const workspaceGid = await this.resolveAsanaWorkspace(
+            context.user.id,
+            service,
+            input.workspaceGid
+          );
+          const data = await service.searchTasks({
+            ...input,
+            workspaceGid
+          });
+          await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });
+          if (data.length) {
+            await this.rememberRecentAsanaTasks(context.user.id, data);
+          }
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_get_task") {
+          const data = await service.getTask(input.taskGid);
+          await this.rememberRecentAsanaTasks(context.user.id, [data]);
+          if (data.workspaceGid) {
+            await this.rememberRecentAsanaWorkspace(context.user.id, {
+              workspaceGid: data.workspaceGid,
+              name: data.workspaceName
+            });
+          }
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_create_task") {
+          const workspaceGid =
+            input.workspaceGid || !(input.projectGids?.length)
+              ? await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid)
+              : undefined;
+          const data = await service.createTask({
+            ...input,
+            workspaceGid
+          });
+          await this.rememberRecentAsanaTasks(context.user.id, [data]);
+          const rememberedWorkspaceGid = data.workspaceGid ?? workspaceGid;
+          if (rememberedWorkspaceGid) {
+            await this.rememberRecentAsanaWorkspace(context.user.id, {
+              workspaceGid: rememberedWorkspaceGid,
+              name: data.workspaceName
+            });
+          }
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "asana_create_task",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: "executed"
+          });
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_update_task") {
+          const data = await service.updateTask(input);
+          await this.rememberRecentAsanaTasks(context.user.id, [data]);
+          if (data.workspaceGid) {
+            await this.rememberRecentAsanaWorkspace(context.user.id, {
+              workspaceGid: data.workspaceGid,
+              name: data.workspaceName
+            });
+          }
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "asana_update_task",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: "executed"
+          });
+          return { ok: true, data };
+        }
+
+        if (toolName === "asana_delete_task") {
+          const data = await service.deleteTask(input.taskGid);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "asana_delete_task",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: "executed"
+          });
+          return { ok: true, data, userMessage: data.summary };
+        }
+      }
+
+      const auth = await this.googleTokenService.getOAuthClientForUser(context.user, {
         requiredScopes:
           toolName === "calendar_list_calendars" ||
           (toolName === "calendar_list_events" && !input.calendarId)

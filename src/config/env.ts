@@ -42,6 +42,10 @@ const envSchema = z
     GOOGLE_CLIENT_SECRET: z.string().min(1).default("dev-google-client-secret"),
     GOOGLE_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/google/callback"),
     GOOGLE_READ_ONLY_MODE: booleanFromString,
+    ASANA_CLIENT_ID: z.string().min(1).default("dev-asana-client-id"),
+    ASANA_CLIENT_SECRET: z.string().min(1).default("dev-asana-client-secret"),
+    ASANA_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/asana/callback"),
+    READ_ONLY_MODE: booleanFromString,
 
     ENCRYPTION_KEY: z.string().min(1).default("dev-only-change-me"),
 
@@ -75,6 +79,12 @@ const envSchema = z
     }
   });
 
-export const env = envSchema.parse(process.env);
+const parsedEnv = envSchema.parse(process.env);
+
+export const env = {
+  ...parsedEnv,
+  READ_ONLY_MODE: parsedEnv.READ_ONLY_MODE || parsedEnv.GOOGLE_READ_ONLY_MODE,
+  GOOGLE_READ_ONLY_MODE: parsedEnv.GOOGLE_READ_ONLY_MODE || parsedEnv.READ_ONLY_MODE
+} as const;
 
 export type AppEnv = typeof env;

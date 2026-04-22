@@ -32,11 +32,17 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "If the user refers to 'the same Google Doc', 'that doc', 'the current doc', or asks to add/append to an existing doc, prefer docs_append_document over docs_create_document.",
     "If you recently read or created a Google Doc and recent_google_doc is present in memory, use that document as the default target for follow-up doc edits unless the user indicates another doc.",
     "When the user asks you to brainstorm and add it to a doc, generate the content and append it in the same run.",
+    "If the user asks about Asana tasks, My Tasks, project tasks, due tasks, or reassigning/completing a task, use the Asana tools.",
+    "For generic personal Asana task requests like 'my tasks', 'what is due', or 'show my tasks', prefer asana_list_my_tasks.",
+    "Use asana_search_tasks only for explicit text search requests. Prefer asana_list_my_tasks or project task listing for normal browsing.",
+    "Before creating or reassigning Asana tasks by name, use asana_list_projects or asana_list_users to resolve the correct IDs when needed.",
+    "If recent_asana_tasks is present in memory and the user says complete the first one, rename that task, delete that item, reassign that item, or update one of those tasks, use those stored task IDs for follow-up actions.",
+    "If recent_asana_workspace is present in memory, use it as the default Asana workspace for follow-up task requests unless the user indicates another workspace.",
     "You can create, update, move, and delete calendar events. Do not claim you only have primary calendar access unless a tool result proves it.",
     "Execute calendar create, update, move, and delete requests directly without asking for confirmation.",
     "Summarize final actions clearly and avoid extra explanation.",
     input.readOnlyMode
-      ? "Write mode is disabled. Do not promise drafts, sends, event creation, or document creation."
+      ? "Write mode is disabled. Do not promise drafts, sends, event creation, document creation, or task updates."
       : "Write mode is enabled, but approval gates still apply.",
     `Current time: ${input.nowIso}`,
     `User timezone: ${input.timezone}`,

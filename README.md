@@ -1,10 +1,11 @@
 # WhatsApp Super Agent
 
-WhatsApp Super Agent is a production-minded MVP for a chat-first AI assistant that users talk to on WhatsApp. It connects a real WhatsApp Business phone number to a Node.js + TypeScript backend, uses OpenAI GPT-5.4 through the Responses API, and executes Google Workspace tools behind deterministic backend safety gates.
+WhatsApp Super Agent is a production-minded MVP for a chat-first AI assistant that users talk to on WhatsApp. It connects a real WhatsApp Business phone number to a Node.js + TypeScript backend, uses OpenAI GPT-5.4 through the Responses API, and executes Google Workspace plus Asana tools behind deterministic backend safety gates.
 
 The MVP is intentionally narrow:
 
 - Read Gmail, Google Calendar, and Google Drive.
+- Read and manage Asana tasks.
 - Create Gmail drafts.
 - Create calendar events and Google Docs with explicit approval where required.
 - Send Gmail drafts only after the user confirms with `SEND`.
@@ -15,9 +16,9 @@ The MVP is intentionally narrow:
 The service is a single Fastify backend with clear module boundaries:
 
 - Transport: WhatsApp Cloud API webhook verification, inbound parsing, outbound text replies, and delivery status logging.
-- Auth: Google OAuth 2.0 web-server flow, encrypted token storage, and automatic refresh before Google API calls.
+- Auth: Google OAuth 2.0 and Asana OAuth web-server flows, encrypted token storage, and automatic refresh before API calls.
 - Agent orchestration: OpenAI Responses API loop, backend-owned tool execution, short-term history, and lightweight memory.
-- Integrations: Gmail, Calendar, Drive, and Docs service wrappers.
+- Integrations: Gmail, Calendar, Drive, Docs, and Asana task service wrappers.
 - Safety: deterministic approval policy, pending action records, audit logs, idempotency checks, and read-only mode.
 - Persistence: PostgreSQL via Prisma, Redis for webhook idempotency/rate limiting, and BullMQ for inbound WhatsApp jobs.
 
@@ -141,7 +142,17 @@ Google:
 - `GOOGLE_CLIENT_ID`: OAuth client ID.
 - `GOOGLE_CLIENT_SECRET`: OAuth client secret.
 - `GOOGLE_REDIRECT_URI`: Usually `http://localhost:3000/auth/google/callback` for local dev.
-- `GOOGLE_READ_ONLY_MODE`: Set `true` to disable write tools.
+
+Asana:
+
+- `ASANA_CLIENT_ID`: OAuth client ID.
+- `ASANA_CLIENT_SECRET`: OAuth client secret.
+- `ASANA_REDIRECT_URI`: Usually `http://localhost:3000/auth/asana/callback` for local dev.
+
+Write control:
+
+- `READ_ONLY_MODE`: Set `true` to disable all write tools.
+- `GOOGLE_READ_ONLY_MODE`: Deprecated alias for `READ_ONLY_MODE`.
 
 Security and runtime:
 
@@ -177,6 +188,48 @@ Configured scopes are centralized in `src/config/constants.ts`:
 - `https://www.googleapis.com/auth/documents`
 
 The assistant replies with a Google connect link when the WhatsApp user has not connected an account yet.
+
+## Asana OAuth Setup
+
+1. Create or choose an Asana app in the developer console.
+2. Configure OAuth with the redirect URI from `.env`, for example:
+
+```text
+http://localhost:3000/auth/asana/callback
+```
+
+3. Register these scopes for the app:
+
+- `tasks:read`
+- `tasks:write`
+- `projects:read`
+- `workspaces:read`
+- `users:read`
+
+4. Put `ASANA_CLIENT_ID`, `ASANA_CLIENT_SECRET`, and `ASANA_REDIRECT_URI` in `.env`.
+
+The assistant replies with an Asana connect link when an Asana tool is used without a connected Asana account.
+
+The app currently requests these Asana scopes:
+
+- `attachments:read`
+- `attachments:write`
+- `attachments:delete`
+- `custom_fields:read`
+- `custom_fields:write`
+- `projects:read`
+- `projects:write`
+- `projects:delete`
+- `stories:read`
+- `stories:write`
+- `tags:read`
+- `tags:write`
+- `tasks:read`
+- `tasks:write`
+- `tasks:delete`
+- `teams:read`
+- `users:read`
+- `workspaces:read`
 
 ## WhatsApp Webhook Setup
 
@@ -225,6 +278,12 @@ Read tools:
 - `calendar_list_events`
 - `drive_search_files`
 - `drive_read_file_metadata`
+- `asana_list_workspaces`
+- `asana_list_projects`
+- `asana_list_users`
+- `asana_list_my_tasks`
+- `asana_search_tasks`
+- `asana_get_task`
 
 Write tools:
 
@@ -232,6 +291,9 @@ Write tools:
 - `gmail_send_draft`
 - `calendar_create_event`
 - `docs_create_document`
+- `asana_create_task`
+- `asana_update_task`
+- `asana_delete_task`
 
 Read-only mode removes write tools from the OpenAI tool list and blocks write execution if called unexpectedly.
 

@@ -12,3 +12,7 @@ process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "google-client";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "google-secret";
 process.env.GOOGLE_REDIRECT_URI =
   process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/auth/google/callback";
+process.env.ASANA_CLIENT_ID = process.env.ASANA_CLIENT_ID ?? "asana-client";
+process.env.ASANA_CLIENT_SECRET = process.env.ASANA_CLIENT_SECRET ?? "asana-secret";
+process.env.ASANA_REDIRECT_URI =
+  process.env.ASANA_REDIRECT_URI ?? "http://localhost:3000/auth/asana/callback";

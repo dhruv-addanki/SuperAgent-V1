@@ -10,18 +10,23 @@ export class UserFacingError extends Error {
 }
 
 export class AuthRequiredError extends UserFacingError {
-  constructor(authUrl: string) {
+  constructor(authUrl: string, provider = "Google", codePrefix = "GOOGLE") {
     super(
-      "Google account is not connected",
-      "GOOGLE_AUTH_REQUIRED",
-      `Your Google account needs to be connected first: ${authUrl}`
+      `${provider} account is not connected`,
+      `${codePrefix}_AUTH_REQUIRED`,
+      `Your ${provider} account needs to be connected first: ${authUrl}`
     );
   }
 }
 
 export class ReauthRequiredError extends UserFacingError {
-  constructor(authUrl: string, reason: string) {
-    super("Google account needs additional access", "GOOGLE_REAUTH_REQUIRED", `${reason}: ${authUrl}`);
+  constructor(
+    authUrl: string,
+    reason: string,
+    provider = "Google",
+    codePrefix = "GOOGLE"
+  ) {
+    super(`${provider} account needs additional access`, `${codePrefix}_REAUTH_REQUIRED`, `${reason}: ${authUrl}`);
   }
 }
 

@@ -53,7 +53,11 @@ describe("tool executor email draft flow", () => {
       getOAuthClientForUser: vi.fn(async () => ({}))
     } as any;
 
-    const executor = new ToolExecutor(prisma, tokenService);
+    const asanaTokenService = {
+      getAccessTokenForUser: vi.fn(async () => "asana-token")
+    } as any;
+
+    const executor = new ToolExecutor(prisma, tokenService, asanaTokenService);
 
     const result = await executor.executeToolCall(
       "gmail_create_draft",
@@ -90,7 +94,11 @@ describe("tool executor email draft flow", () => {
       getOAuthClientForUser: vi.fn(async () => ({}))
     } as any;
 
-    const executor = new ToolExecutor(prisma, tokenService);
+    const asanaTokenService = {
+      getAccessTokenForUser: vi.fn(async () => "asana-token")
+    } as any;
+
+    const executor = new ToolExecutor(prisma, tokenService, asanaTokenService);
 
     const result = await executor.executeToolCall(
       "gmail_create_draft",
@@ -121,7 +129,11 @@ describe("tool executor email draft flow", () => {
       getOAuthClientForUser: vi.fn(async () => ({}))
     } as any;
 
-    const executor = new ToolExecutor(prisma, tokenService);
+    const asanaTokenService = {
+      getAccessTokenForUser: vi.fn(async () => "asana-token")
+    } as any;
+
+    const executor = new ToolExecutor(prisma, tokenService, asanaTokenService);
 
     const result = await executor.executeToolCall(
       "gmail_search_threads",
@@ -147,7 +159,11 @@ describe("tool executor email draft flow", () => {
       getOAuthClientForUser: vi.fn(async () => ({}))
     } as any;
 
-    const executor = new ToolExecutor(prisma, tokenService);
+    const asanaTokenService = {
+      getAccessTokenForUser: vi.fn(async () => "asana-token")
+    } as any;
+
+    const executor = new ToolExecutor(prisma, tokenService, asanaTokenService);
 
     const result = await executor.executeToolCall(
       "gmail_trash_thread",

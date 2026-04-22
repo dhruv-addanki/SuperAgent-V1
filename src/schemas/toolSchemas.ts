@@ -8,6 +8,8 @@ const toJsonSchema = zodToJsonSchema as unknown as (
 ) => Record<string, unknown>;
 
 const isoDate = z.string().datetime({ offset: true });
+const isoDateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const isoDateOrDateTime = z.union([isoDate, isoDateOnly]);
 
 export const toolInputSchemas = {
   gmail_search_threads: z
@@ -134,6 +136,79 @@ export const toolInputSchemas = {
       content: z.string().min(1),
       folderId: z.string().optional()
     })
+    .strict(),
+
+  asana_list_workspaces: z.object({}).strict(),
+
+  asana_list_projects: z
+    .object({
+      workspaceGid: z.string().min(1),
+      query: z.string().min(1).optional()
+    })
+    .strict(),
+
+  asana_list_users: z
+    .object({
+      workspaceGid: z.string().min(1),
+      query: z.string().min(1).optional()
+    })
+    .strict(),
+
+  asana_list_my_tasks: z
+    .object({
+      workspaceGid: z.string().min(1).optional(),
+      projectGid: z.string().min(1).optional(),
+      completed: z.boolean().optional(),
+      dueBefore: isoDateOrDateTime.optional(),
+      limit: z.number().int().positive().max(100).optional()
+    })
+    .strict(),
+
+  asana_search_tasks: z
+    .object({
+      workspaceGid: z.string().min(1).optional(),
+      text: z.string().min(1),
+      projectGid: z.string().min(1).optional(),
+      assigneeGid: z.string().min(1).optional(),
+      completed: z.boolean().optional(),
+      limit: z.number().int().positive().max(100).optional()
+    })
+    .strict(),
+
+  asana_get_task: z
+    .object({
+      taskGid: z.string().min(1)
+    })
+    .strict(),
+
+  asana_create_task: z
+    .object({
+      workspaceGid: z.string().min(1).optional(),
+      name: z.string().min(1),
+      notes: z.string().min(1).optional(),
+      dueOn: isoDateOnly.optional(),
+      dueAt: isoDate.optional(),
+      assigneeGid: z.string().min(1).optional(),
+      projectGids: z.array(z.string().min(1)).max(20).optional()
+    })
+    .strict(),
+
+  asana_update_task: z
+    .object({
+      taskGid: z.string().min(1),
+      name: z.string().min(1).optional(),
+      notes: z.string().min(1).optional(),
+      dueOn: isoDateOnly.nullable().optional(),
+      dueAt: isoDate.nullable().optional(),
+      assigneeGid: z.string().min(1).nullable().optional(),
+      completed: z.boolean().optional()
+    })
+    .strict(),
+
+  asana_delete_task: z
+    .object({
+      taskGid: z.string().min(1)
+    })
     .strict()
 } as const;
 
@@ -168,7 +243,22 @@ export const toolDescriptions: Record<ToolName, string> = {
   docs_append_document:
     "Append content to an existing Google Doc by document ID. Use this when the user refers to an existing/current/same doc.",
   docs_create_document:
-    "Create a new Google Doc with the supplied title and content. Use only when the user explicitly wants a new document."
+    "Create a new Google Doc with the supplied title and content. Use only when the user explicitly wants a new document.",
+  asana_list_workspaces: "List the Asana workspaces visible to the connected user.",
+  asana_list_projects:
+    "List Asana projects in a workspace. Use this to resolve a project before reading or writing tasks.",
+  asana_list_users:
+    "List Asana users in a workspace. Use this to resolve an assignee before creating or reassigning tasks.",
+  asana_list_my_tasks:
+    "List tasks from Asana My Tasks or from a specific Asana project. Prefer this for normal task browsing.",
+  asana_search_tasks:
+    "Search Asana tasks in a workspace by text and optional filters. Use this only for explicit search requests.",
+  asana_get_task: "Read a single Asana task by task GID.",
+  asana_create_task: "Create a new Asana task.",
+  asana_update_task:
+    "Update an existing Asana task. Use this to rename, reassign, change dates, or mark a task complete or incomplete.",
+  asana_delete_task:
+    "Delete an existing Asana task by task GID. Use this only when the user clearly asks to delete or remove the task."
 };
 
 export const readOnlyToolNames = [
@@ -179,7 +269,13 @@ export const readOnlyToolNames = [
   "calendar_list_events",
   "drive_search_files",
   "drive_read_file_metadata",
-  "docs_read_document"
+  "docs_read_document",
+  "asana_list_workspaces",
+  "asana_list_projects",
+  "asana_list_users",
+  "asana_list_my_tasks",
+  "asana_search_tasks",
+  "asana_get_task"
 ] as const satisfies readonly ToolName[];
 
 export const writeToolNames = [
@@ -191,7 +287,10 @@ export const writeToolNames = [
   "calendar_delete_event",
   "drive_delete_file",
   "docs_append_document",
-  "docs_create_document"
+  "docs_create_document",
+  "asana_create_task",
+  "asana_update_task",
+  "asana_delete_task"
 ] as const satisfies readonly ToolName[];
 
 export function isToolName(value: string): value is ToolName {
