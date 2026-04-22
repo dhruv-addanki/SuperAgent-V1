@@ -2,9 +2,13 @@ import crypto from "node:crypto";
 import { env } from "../../config/env";
 import { WHATSAPP_TEXT_LIMIT } from "../../config/constants";
 import { ExternalApiError } from "../../lib/errors";
-import type { SendTextResult } from "./whatsappTypes";
+import type { SendTextResult, SendTypingIndicatorResult } from "./whatsappTypes";
 
 export class WhatsAppService {
+  private get messagesUrl(): string {
+    return `https://graph.facebook.com/v20.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  }
+
   async sendTextMessage(to: string, body: string): Promise<SendTextResult> {
     const safeBody = this.formatText(body);
 
@@ -12,8 +16,7 @@ export class WhatsAppService {
       return { messageId: `dev-${Date.now()}` };
     }
 
-    const url = `https://graph.facebook.com/v20.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-    const response = await fetch(url, {
+    const response = await fetch(this.messagesUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
@@ -42,6 +45,43 @@ export class WhatsAppService {
 
     const data = (await response.json()) as any;
     return { messageId: data.messages?.[0]?.id };
+  }
+
+  async sendTypingIndicator(messageId: string): Promise<SendTypingIndicatorResult> {
+    if (!messageId) {
+      return { success: false };
+    }
+
+    if (env.NODE_ENV !== "production" && env.WHATSAPP_ACCESS_TOKEN.startsWith("dev-")) {
+      return { success: true };
+    }
+
+    const response = await fetch(this.messagesUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        status: "read",
+        message_id: messageId,
+        typing_indicator: {
+          type: "text"
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new ExternalApiError(
+        "whatsapp",
+        "I wasn't able to send the WhatsApp typing indicator.",
+        new Error(errorBody)
+      );
+    }
+
+    return { success: true };
   }
 
   formatText(body: string): string {

@@ -74,6 +74,12 @@ export class AgentOrchestrator {
     });
 
     try {
+      if (input.messageId) {
+        this.whatsappService.sendTypingIndicator(input.messageId).catch((error) => {
+          logger.warn({ error, messageId: input.messageId }, "Failed to send WhatsApp typing indicator");
+        });
+      }
+
       const confirmationIntent = parseConfirmationIntent(input.text);
       if (confirmationIntent) {
         const handled = await this.handleConfirmationIntent({

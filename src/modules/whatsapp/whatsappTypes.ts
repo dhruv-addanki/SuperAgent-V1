@@ -32,3 +32,7 @@ export interface ParsedWhatsAppWebhook {
 export interface SendTextResult {
   messageId?: string;
 }
+
+export interface SendTypingIndicatorResult {
+  success: boolean;
+}
