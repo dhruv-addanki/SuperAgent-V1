@@ -31,7 +31,13 @@ import {
 } from "../../schemas/toolSchemas";
 import { serializeError, UserFacingError, userMessageForError } from "../../lib/errors";
 import { formatForUser } from "../../lib/time";
-import type { GmailThreadSummary } from "../google/googleTypes";
+import type {
+  CalendarEventSummary,
+  CalendarSummary,
+  DriveFileSummary,
+  GmailThreadMessage,
+  GmailThreadSummary
+} from "../google/googleTypes";
 
 export interface ToolExecutionContext {
   user: User;
@@ -108,6 +114,118 @@ export class ToolExecutor {
         userId,
         key: "recent_gmail_threads",
         value: normalizedThreads,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentGmailThreadMessages(
+    userId: string,
+    messages: GmailThreadMessage[]
+  ): Promise<void> {
+    const first = messages[0];
+    if (!first?.threadId) return;
+
+    await this.rememberRecentGmailThreads(userId, [
+      {
+        threadId: first.threadId,
+        subject: first.subject,
+        from: first.from,
+        date: first.date,
+        snippet: first.snippet ?? first.bodyText?.slice(0, 160)
+      }
+    ]);
+  }
+
+  private async rememberRecentCalendars(
+    userId: string,
+    calendars: CalendarSummary[]
+  ): Promise<void> {
+    const normalizedCalendars = calendars.slice(0, 10).map((calendar) => ({
+      calendarId: calendar.id,
+      summary: calendar.summary,
+      primary: calendar.primary,
+      accessRole: calendar.accessRole
+    }));
+
+    if (!normalizedCalendars.length) return;
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_calendars" } },
+      update: {
+        value: normalizedCalendars,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_calendars",
+        value: normalizedCalendars,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentCalendarEvents(
+    userId: string,
+    events: CalendarEventSummary[]
+  ): Promise<void> {
+    const normalizedEvents = events
+      .filter((event) => event.id)
+      .slice(0, 10)
+      .map((event) => ({
+        eventId: event.id!,
+        title: event.title,
+        start: event.start,
+        end: event.end,
+        calendarId: event.calendarId,
+        calendarSummary: event.calendarSummary,
+        htmlLink: event.htmlLink
+      }));
+
+    if (!normalizedEvents.length) return;
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_calendar_events" } },
+      update: {
+        value: normalizedEvents,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_calendar_events",
+        value: normalizedEvents,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentDriveFiles(
+    userId: string,
+    files: DriveFileSummary[]
+  ): Promise<void> {
+    const normalizedFiles = files
+      .filter((file) => file.id)
+      .slice(0, 10)
+      .map((file) => ({
+        fileId: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        modifiedTime: file.modifiedTime,
+        webViewLink: file.webViewLink
+      }));
+
+    if (!normalizedFiles.length) return;
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_drive_files" } },
+      update: {
+        value: normalizedFiles,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_drive_files",
+        value: normalizedFiles,
         confidence: 1
       }
     });
@@ -390,7 +508,7 @@ export class ToolExecutor {
     if (!matchesPositiveConfirmation(intent, expected)) {
       return {
         ok: false,
-        userMessage: "Reply yes to approve this action, or CANCEL to cancel it."
+        userMessage: "Reply yes to approve it, or CANCEL to cancel it."
       };
     }
 
@@ -693,6 +811,7 @@ export class ToolExecutor {
       if (toolName === "gmail_read_thread") {
         const service = new GmailService(auth);
         const data = await service.readThread(input.threadId);
+        await this.rememberRecentGmailThreadMessages(context.user.id, data);
         return { ok: true, data };
       }
 
@@ -783,18 +902,21 @@ export class ToolExecutor {
       if (toolName === "calendar_list_calendars") {
         const service = new CalendarService(auth);
         const data = await service.listCalendars();
+        await this.rememberRecentCalendars(context.user.id, data);
         return { ok: true, data };
       }
 
       if (toolName === "calendar_list_events") {
         const service = new CalendarService(auth);
         const data = await service.listEvents(input);
+        await this.rememberRecentCalendarEvents(context.user.id, data);
         return { ok: true, data };
       }
 
       if (toolName === "calendar_create_event") {
         const service = new CalendarService(auth);
         const data = await service.createEvent(input);
+        await this.rememberRecentCalendarEvents(context.user.id, [data]);
         await this.audit.log({
           userId: context.user.id,
           actionType: "calendar_create_event",
@@ -813,6 +935,7 @@ export class ToolExecutor {
       if (toolName === "calendar_update_event") {
         const service = new CalendarService(auth);
         const data = await service.updateEvent(input);
+        await this.rememberRecentCalendarEvents(context.user.id, [data]);
         await this.audit.log({
           userId: context.user.id,
           actionType: "calendar_update_event",
@@ -845,12 +968,14 @@ export class ToolExecutor {
       if (toolName === "drive_search_files") {
         const service = new DriveService(auth);
         const data = await service.searchFiles(input);
+        await this.rememberRecentDriveFiles(context.user.id, data);
         return { ok: true, data };
       }
 
       if (toolName === "drive_read_file_metadata") {
         const service = new DriveService(auth);
         const data = await service.readFileMetadata(input.fileId);
+        await this.rememberRecentDriveFiles(context.user.id, [data]);
         return { ok: true, data };
       }
 
@@ -918,11 +1043,38 @@ export class ToolExecutor {
         });
       }
 
+      const defaultMessage =
+        userMessageForError(error) === "I hit a problem handling that. Please try again."
+          ? defaultToolFailureMessage(toolName)
+          : userMessageForError(error);
+
       return {
         ok: false,
         error: serializeError(error),
-        userMessage: userMessageForError(error)
+        userMessage: defaultMessage
       };
     }
   }
+}
+
+function defaultToolFailureMessage(toolName: ToolName): string {
+  if (toolName.startsWith("asana_")) {
+    return "I couldn't complete that Asana request right now. Try again in a moment.";
+  }
+  if (toolName.startsWith("calendar_")) {
+    return "I couldn't complete that calendar request right now. Try again in a moment.";
+  }
+  if (toolName.startsWith("gmail_")) {
+    return "I couldn't complete that Gmail request right now. Try again in a moment.";
+  }
+  if (toolName.startsWith("drive_")) {
+    return "I couldn't complete that Drive request right now. Try again in a moment.";
+  }
+  if (toolName.startsWith("docs_")) {
+    return "I couldn't complete that Google Doc request right now. Try again in a moment.";
+  }
+  if (toolName === "web_search") {
+    return "I couldn't complete that web lookup right now. Try again in a moment.";
+  }
+  return "I hit a problem handling that. Please try again.";
 }

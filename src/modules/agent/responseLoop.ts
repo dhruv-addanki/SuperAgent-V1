@@ -5,6 +5,7 @@ import type {
   ResponsesClient,
   ResponseToolDefinition
 } from "../../lib/openaiClient";
+import { formatToolResultForModel } from "./communicationFormatter";
 import type { ToolExecutionResult } from "./toolExecutor";
 
 export interface FunctionCall {
@@ -56,7 +57,7 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
     if (toolRounds >= maxToolRounds) {
       return {
         assistantMessage:
-          "I could not finish that safely in one pass. Please try a narrower request.",
+          "I couldn't finish that cleanly in one pass. Try a narrower follow-up.",
         toolRounds,
         stoppedForMaxRounds: true
       };
@@ -86,7 +87,7 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
       toolOutputItems.push({
         type: "function_call_output",
         call_id: call.callId,
-        output: JSON.stringify(result)
+        output: JSON.stringify(formatToolResultForModel(call.name, result))
       });
     }
 

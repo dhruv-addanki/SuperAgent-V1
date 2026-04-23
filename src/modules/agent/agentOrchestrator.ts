@@ -30,6 +30,10 @@ import { ToolExecutor } from "./toolExecutor";
 import { getAvailableToolDefinitions } from "./toolRegistry";
 import { runResponseLoop } from "./responseLoop";
 import {
+  buildConversationContext,
+  formatConversationContextForPrompt
+} from "./conversationContext";
+import {
   asanaTaskDueDate,
   formatAsanaTaskOverview,
   matchGenericAsanaMyTasksRequest
@@ -153,7 +157,7 @@ export class AgentOrchestrator {
           await this.reply(
             conversation.id,
             preparedInput.from,
-            result.userMessage ?? "I couldn't reach Google Calendar right now."
+            result.userMessage ?? "I couldn't load your calendar right now. Try again in a moment."
           );
           return;
         }
@@ -186,7 +190,7 @@ export class AgentOrchestrator {
           await this.reply(
             conversation.id,
             preparedInput.from,
-            result.userMessage ?? "I couldn't reach Asana right now."
+            result.userMessage ?? "I couldn't load your Asana tasks right now. Try again in a moment."
           );
           return;
         }
@@ -205,16 +209,21 @@ export class AgentOrchestrator {
       await this.longTermMemory.maybeExtractMemoryFromConversation(user.id, preparedInput.text);
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
-      const memory = await this.longTermMemory.getRelevantMemoryForPrompt(user.id);
+      const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
       const pendingAction = await resolvePendingActionFromConversation(
         this.prisma,
         user.id,
         conversation.id
       );
+      const conversationContext = buildConversationContext({
+        latestUserMessage: preparedInput.text,
+        memoryEntries,
+        pendingAction,
+        pendingActionSummary: buildPendingActionContext(pendingAction)
+      });
       const prompt = buildSystemPrompt({
         timezone: user.timezone,
-        memory,
-        pendingContext: buildPendingActionContext(pendingAction),
+        conversationContext: formatConversationContextForPrompt(conversationContext),
         readOnlyMode: env.READ_ONLY_MODE,
         nowIso: new Date().toISOString()
       });
@@ -297,7 +306,7 @@ export class AgentOrchestrator {
     );
 
     if (!pending) {
-      await this.reply(input.conversation.id, input.to, "No pending action to confirm.");
+      await this.reply(input.conversation.id, input.to, "There isn't anything pending to confirm right now.");
       return true;
     }
 
@@ -315,7 +324,7 @@ export class AgentOrchestrator {
       await this.reply(
         input.conversation.id,
         input.to,
-        "Reply yes to approve this action, or CANCEL to cancel it."
+        "Reply yes to approve it, or CANCEL to cancel it."
       );
       return true;
     }

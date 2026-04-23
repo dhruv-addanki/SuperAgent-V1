@@ -109,4 +109,65 @@ describe("response loop", () => {
     expect(result.assistantMessage).toBe("Draft ready.\n\nTo: brad@example.com");
     expect(result.toolRounds).toBe(0);
   });
+
+  it("feeds formatted communication summaries back into the model", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi
+        .fn()
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_3",
+              name: "asana_list_my_tasks",
+              arguments: JSON.stringify({
+                dueOn: "2026-04-23"
+              })
+            }
+          ]
+        })
+        .mockResolvedValueOnce({
+          output_text: "You have 1 task due today."
+        })
+    };
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "show my tasks due today" }],
+      executeTool: vi.fn(async () => ({
+        ok: true,
+        data: [
+          {
+            gid: "task_1",
+            name: "Ship launch notes",
+            completed: false
+          }
+        ]
+      })),
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).toBe("You have 1 task due today.");
+    const secondCall = (client.createResponse as any).mock.calls[1][0];
+    const functionOutput = secondCall.input.find(
+      (item: any) => item.type === "function_call_output" && item.call_id === "call_3"
+    );
+
+    expect(JSON.parse(functionOutput.output)).toMatchObject({
+      communication: {
+        app: "asana",
+        summary: "Found 1 Asana task.",
+        referenceEntities: [
+          {
+            kind: "asana_task",
+            id: "task_1",
+            name: "Ship launch notes"
+          }
+        ]
+      }
+    });
+  });
 });

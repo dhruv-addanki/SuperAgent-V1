@@ -1,14 +1,26 @@
 import type { PrismaClient } from "@prisma/client";
+import type { PromptMemoryEntry } from "../agent/conversationContext";
 
 export class LongTermMemory {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async getRelevantMemoryForPrompt(userId: string): Promise<string> {
+  async getRecentEntriesForContext(userId: string, take = 20): Promise<PromptMemoryEntry[]> {
     const entries = await this.prisma.memoryEntry.findMany({
       where: { userId },
       orderBy: { updatedAt: "desc" },
-      take: 10
+      take
     });
+
+    return entries.map((entry) => ({
+      key: entry.key,
+      value: entry.value,
+      confidence: entry.confidence,
+      updatedAt: entry.updatedAt instanceof Date ? entry.updatedAt : new Date()
+    }));
+  }
+
+  async getRelevantMemoryForPrompt(userId: string): Promise<string> {
+    const entries = await this.getRecentEntriesForContext(userId, 10);
 
     if (!entries.length) return "No stored user preferences yet.";
 

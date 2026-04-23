@@ -70,6 +70,75 @@ describe("agent orchestrator", () => {
       "+15555550100",
       "Asana tasks ready"
     );
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
+      "Structured conversation context:"
+    );
+  });
+
+  it("builds structured conversation context for follow-up prompt assembly", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "Updated the doc",
+      toolRounds: 0
+    });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_google_doc",
+            value: {
+              documentId: "doc_123",
+              title: "Strategy Notes",
+              url: "https://docs.google.com/document/d/doc_123/edit"
+            }
+          },
+          {
+            key: "recent_asana_tasks",
+            value: [{ taskGid: "task_1", name: "Old task" }]
+          }
+        ])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      {
+        sendTextMessage: vi.fn(async () => undefined),
+        sendTypingIndicator: vi.fn(async () => undefined)
+      } as any
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "append this to the same doc"
+    });
+
+    const instructions = runResponseLoopMock.mock.calls[0][0].instructions;
+    expect(instructions).toContain("Active app/workflow: docs");
+    expect(instructions).toContain("Google Doc: Strategy Notes (documentId: doc_123)");
+    expect(instructions).not.toContain("Old task");
   });
 
   it("short-circuits generic Asana due-today requests before the response loop", async () => {
