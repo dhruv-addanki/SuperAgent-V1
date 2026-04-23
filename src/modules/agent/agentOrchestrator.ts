@@ -27,10 +27,16 @@ import { ToolExecutor } from "./toolExecutor";
 import { getAvailableToolDefinitions } from "./toolRegistry";
 import { runResponseLoop } from "./responseLoop";
 import {
+  asanaTaskDueDate,
+  formatAsanaTaskOverview,
+  matchGenericAsanaMyTasksRequest
+} from "./asanaReadShortcut";
+import {
   calendarOverviewWindow,
   formatCalendarOverview,
   matchGenericCalendarOverviewRequest
 } from "./calendarReadShortcut";
+import type { AsanaTaskSummary } from "../asana/asanaTypes";
 import type { CalendarEventSummary } from "../google/googleTypes";
 
 export interface InboundWhatsAppTextInput {
@@ -123,6 +129,42 @@ export class AgentOrchestrator {
           conversation.id,
           input.from,
           formatCalendarOverview((result.data as CalendarEventSummary[] | undefined) ?? [], user.timezone, window.label)
+        );
+        return;
+      }
+
+      const genericAsanaTaskOverview = matchGenericAsanaMyTasksRequest(input.text);
+      if (genericAsanaTaskOverview) {
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_list_my_tasks",
+          {
+            dueOn: asanaTaskDueDate(genericAsanaTaskOverview, user.timezone),
+            completed: false,
+            limit: 20
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: input.text
+          }
+        );
+
+        if (!result.ok) {
+          await this.reply(
+            conversation.id,
+            input.from,
+            result.userMessage ?? "I couldn't reach Asana right now."
+          );
+          return;
+        }
+
+        await this.reply(
+          conversation.id,
+          input.from,
+          formatAsanaTaskOverview(
+            (result.data as AsanaTaskSummary[] | undefined) ?? [],
+            genericAsanaTaskOverview
+          )
         );
         return;
       }
