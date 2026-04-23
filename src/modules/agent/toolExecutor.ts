@@ -54,6 +54,78 @@ export interface ToolExecutionResult {
   stopAfterTool?: boolean;
 }
 
+const NO_DUE_DATE_PATTERNS = [
+  /\bno due date\b/,
+  /\bwithout (?:a |any )?due date\b/,
+  /\bno deadline\b/,
+  /\bwithout (?:a )?deadline\b/,
+  /\b(?:remove|clear)\s+(?:the\s+)?due date\b/,
+  /\b(?:don't|do not|dont)\s+(?:set|add|include)\s+(?:a\s+)?due date\b/,
+  /\bno due needed\b/,
+  /\bno date needed\b/
+];
+const TIME_OF_DAY_PATTERN =
+  /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b|\bnoon\b|\bmidnight\b/i;
+
+function requestsNoDueDate(latestUserMessage: string): boolean {
+  const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'");
+  return NO_DUE_DATE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function mentionsExplicitDueTime(latestUserMessage: string): boolean {
+  return TIME_OF_DAY_PATTERN.test(latestUserMessage);
+}
+
+function normalizeAsanaWriteInput(
+  toolName: ToolName,
+  input: any,
+  latestUserMessage: string
+): any {
+  if (toolName !== "asana_create_task" && toolName !== "asana_update_task") {
+    return input;
+  }
+
+  const normalized = { ...input };
+  const hasDueOn = Object.prototype.hasOwnProperty.call(normalized, "dueOn");
+  const hasDueAt = Object.prototype.hasOwnProperty.call(normalized, "dueAt");
+
+  if (!hasDueOn && !hasDueAt) return normalized;
+
+  if (requestsNoDueDate(latestUserMessage)) {
+    if (toolName === "asana_create_task") {
+      delete normalized.dueOn;
+      delete normalized.dueAt;
+    } else {
+      normalized.dueOn = null;
+      normalized.dueAt = null;
+    }
+    return normalized;
+  }
+
+  const dueOn = normalized.dueOn;
+  const dueAt = normalized.dueAt;
+
+  if (dueOn === null && dueAt !== undefined && dueAt !== null) {
+    delete normalized.dueOn;
+    return normalized;
+  }
+
+  if (dueAt === null && dueOn !== undefined && dueOn !== null) {
+    delete normalized.dueAt;
+    return normalized;
+  }
+
+  if (typeof dueOn === "string" && typeof dueAt === "string") {
+    if (mentionsExplicitDueTime(latestUserMessage)) {
+      delete normalized.dueOn;
+    } else {
+      delete normalized.dueAt;
+    }
+  }
+
+  return normalized;
+}
+
 export class ToolExecutor {
   private readonly audit: AuditService;
 
@@ -451,7 +523,8 @@ export class ToolExecutor {
     }
 
     const toolName = toolNameValue;
-    const parsedInput = this.validateInput(toolName, rawInput);
+    let parsedInput = this.validateInput(toolName, rawInput);
+    parsedInput = normalizeAsanaWriteInput(toolName, parsedInput, context.latestUserMessage);
 
     if (env.READ_ONLY_MODE && isWriteTool(toolName)) {
       await this.audit.log({
@@ -572,11 +645,13 @@ export class ToolExecutor {
                 : toolName === "asana_list_users"
                   ? ["users:read", "workspaces:read"]
                   : toolName === "asana_list_project_tasks"
-                    ? ["tasks:read", "projects:read"]
+                  ? ["tasks:read", "projects:read"]
                   : toolName === "asana_delete_task"
                     ? ["tasks:delete", "tasks:read"]
-                  : toolName === "asana_create_task" || toolName === "asana_update_task"
+                  : toolName === "asana_create_task"
                     ? ["tasks:write"]
+                    : toolName === "asana_update_task"
+                      ? ["tasks:write", "tasks:read"]
                     : ["tasks:read"],
           reconnectReason:
             toolName === "asana_create_task" ||

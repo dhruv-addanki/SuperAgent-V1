@@ -196,6 +196,40 @@ describe("tool executor Asana flows", () => {
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(3);
   });
 
+  it("drops conflicting due fields when the user asks for no due date", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: { upsert: vi.fn(async () => undefined) }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn(async () => ({})) } as any,
+      { getAccessTokenForUser: vi.fn(async () => "asana-token") } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        workspaceGid: "workspace_1",
+        name: "Voice task",
+        dueOn: "2026-04-23",
+        dueAt: "2026-04-23T16:00:00.000Z"
+      },
+      {
+        user: { id: "user_1", timezone: "America/New_York", whatsappPhone: "+15555550100" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "Make an Asana task with no due date"
+      }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith({
+      workspaceGid: "workspace_1",
+      name: "Voice task"
+    });
+  });
+
   it("stores recent Asana task context when updating a task", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },
@@ -224,6 +258,40 @@ describe("tool executor Asana flows", () => {
       completed: true
     });
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears both due fields when the user asks to remove the due date", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: { upsert: vi.fn(async () => undefined) }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn(async () => ({})) } as any,
+      { getAccessTokenForUser: vi.fn(async () => "asana-token") } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "asana_update_task",
+      {
+        taskGid: "task_1",
+        dueOn: "2026-04-23",
+        dueAt: "2026-04-23T16:00:00.000Z"
+      },
+      {
+        user: { id: "user_1", timezone: "America/New_York", whatsappPhone: "+15555550100" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "Remove the due date from that task"
+      }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(updateTaskMock).toHaveBeenCalledWith({
+      taskGid: "task_1",
+      dueOn: null,
+      dueAt: null
+    });
   });
 
   it("deletes a task directly when asked", async () => {

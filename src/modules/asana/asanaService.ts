@@ -215,6 +215,11 @@ function sortTasks(
   return copy;
 }
 
+interface AsanaDueMutationFields {
+  dueOn?: string | null;
+  dueAt?: string | null;
+}
+
 export class AsanaService {
   constructor(private readonly accessToken: string) {}
 
@@ -437,21 +442,27 @@ export class AsanaService {
     assigneeGid?: string;
     projectGids?: string[];
   }): Promise<AsanaTaskDetail> {
+    const dueFields = await this.resolveDueMutationFields({
+      dueOn: input.dueOn,
+      dueAt: input.dueAt
+    });
+
     const data = await this.request<any>("/tasks", {
       method: "POST",
       query: {
         opt_fields: TASK_FIELDS
       },
       body: {
-        data: {
-          name: input.name,
-          workspace: input.workspaceGid,
-          notes: input.notes,
-          due_on: input.dueOn,
-          due_at: input.dueAt,
-          assignee: input.assigneeGid,
-          projects: input.projectGids
-        }
+        data: this.buildTaskMutationData(
+          {
+            name: input.name,
+            workspace: input.workspaceGid,
+            notes: input.notes,
+            assignee: input.assigneeGid,
+            projects: input.projectGids
+          },
+          dueFields
+        )
       }
     });
 
@@ -467,20 +478,29 @@ export class AsanaService {
     assigneeGid?: string | null;
     completed?: boolean;
   }): Promise<AsanaTaskDetail> {
+    const dueFields = await this.resolveDueMutationFields(
+      {
+        dueOn: input.dueOn,
+        dueAt: input.dueAt
+      },
+      input.taskGid
+    );
+
     const data = await this.request<any>(`/tasks/${input.taskGid}`, {
       method: "PUT",
       query: {
         opt_fields: TASK_FIELDS
       },
       body: {
-        data: {
-          name: input.name,
-          notes: input.notes,
-          due_on: input.dueOn,
-          due_at: input.dueAt,
-          assignee: input.assigneeGid,
-          completed: input.completed
-        }
+        data: this.buildTaskMutationData(
+          {
+            name: input.name,
+            notes: input.notes,
+            assignee: input.assigneeGid,
+            completed: input.completed
+          },
+          dueFields
+        )
       }
     });
 
@@ -515,6 +535,66 @@ export class AsanaService {
         "ASANA_NOT_FOUND"
       ].includes(error.code)
     );
+  }
+
+  private async resolveDueMutationFields(
+    input: AsanaDueMutationFields,
+    taskGid?: string
+  ): Promise<AsanaDueMutationFields> {
+    const hasDueOn = Object.prototype.hasOwnProperty.call(input, "dueOn");
+    const hasDueAt = Object.prototype.hasOwnProperty.call(input, "dueAt");
+
+    if (!hasDueOn && !hasDueAt) return {};
+
+    if (input.dueOn === null && input.dueAt === null) {
+      if (taskGid) {
+        const currentTask = await this.getTask(taskGid);
+        if (currentTask.dueAt) return { dueAt: null };
+        if (currentTask.dueOn) return { dueOn: null };
+      }
+      return { dueOn: null };
+    }
+
+    if (input.dueOn === null && input.dueAt !== undefined) {
+      return input.dueAt === null
+        ? { dueOn: null }
+        : typeof input.dueAt === "string"
+          ? { dueAt: input.dueAt }
+          : { dueOn: null };
+    }
+
+    if (input.dueAt === null && input.dueOn !== undefined) {
+      return input.dueOn === null
+        ? { dueOn: null }
+        : typeof input.dueOn === "string"
+          ? { dueOn: input.dueOn }
+          : { dueAt: null };
+    }
+
+    if (typeof input.dueOn === "string" && typeof input.dueAt === "string") {
+      return { dueAt: input.dueAt };
+    }
+
+    if (input.dueOn !== undefined) return { dueOn: input.dueOn };
+    if (input.dueAt !== undefined) return { dueAt: input.dueAt };
+    return {};
+  }
+
+  private buildTaskMutationData(
+    base: Record<string, unknown>,
+    dueFields: AsanaDueMutationFields
+  ): Record<string, unknown> {
+    const data: Record<string, unknown> = { ...base };
+
+    if (Object.prototype.hasOwnProperty.call(dueFields, "dueOn")) {
+      data.due_on = dueFields.dueOn;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dueFields, "dueAt")) {
+      data.due_at = dueFields.dueAt;
+    }
+
+    return data;
   }
 
   private async requestCollection<T>(

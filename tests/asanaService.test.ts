@@ -237,6 +237,75 @@ describe("asana service", () => {
     ]);
   });
 
+  it("sends only one due field when both are present on create", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          gid: "task_1",
+          name: "Voice task",
+          completed: false,
+          due_at: "2026-04-23T16:00:00.000Z"
+        }
+      })
+    });
+
+    await new AsanaService("token").createTask({
+      workspaceGid: "workspace_1",
+      name: "Voice task",
+      dueOn: "2026-04-23",
+      dueAt: "2026-04-23T16:00:00.000Z"
+    });
+
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(requestBody.data).toMatchObject({
+      name: "Voice task",
+      workspace: "workspace_1",
+      due_at: "2026-04-23T16:00:00.000Z"
+    });
+    expect(requestBody.data).not.toHaveProperty("due_on");
+  });
+
+  it("clears only the active due field when removing a due date on update", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            gid: "task_1",
+            name: "Existing task",
+            completed: false,
+            due_at: "2026-04-23T16:00:00.000Z"
+          }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: {
+            gid: "task_1",
+            name: "Existing task",
+            completed: false,
+            due_at: null,
+            due_on: null
+          }
+        })
+      });
+
+    await new AsanaService("token").updateTask({
+      taskGid: "task_1",
+      dueOn: null,
+      dueAt: null
+    });
+
+    expect(fetchMock.mock.calls[0][0].toString()).toContain("/tasks/task_1?");
+    const requestBody = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+    expect(requestBody.data).toMatchObject({
+      due_at: null
+    });
+    expect(requestBody.data).not.toHaveProperty("due_on");
+  });
+
   it("maps expired auth failures", async () => {
     fetchMock.mockResolvedValue({
       ok: false,

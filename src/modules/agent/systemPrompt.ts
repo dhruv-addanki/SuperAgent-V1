@@ -52,6 +52,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "If the user says across all projects, across My Tasks, or otherwise asks for all of their Asana work, do not narrow the answer to a recent project.",
     "If the user asks for the latest or last open/completed Asana task, rely on task timestamps such as completed_at, modified_at, or created_at instead of recent display order.",
     "Before creating or reassigning Asana tasks by name, use asana_list_projects, asana_list_teams, or asana_list_users to resolve the correct IDs when needed.",
+    "Never send both dueOn and dueAt in the same Asana create or update tool call.",
+    "If the user says no due date, without a due date, or remove the due date for an Asana task, create or update it without inferring any due date.",
     "If recent_asana_tasks is present in memory and the user says complete the first one, rename that task, delete that item, reassign that item, or update one of those tasks, use those stored task IDs for follow-up actions.",
     "If recent_asana_workspace is present in memory, use it as the default Asana workspace for follow-up task requests unless the user indicates another workspace.",
     "If recent_asana_projects or recent_asana_teams is present in memory and the user refers to that project, that team, or one of the listed Asana projects, use those stored IDs for follow-up requests.",

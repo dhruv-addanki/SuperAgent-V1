@@ -282,9 +282,10 @@ export const toolDescriptions: Record<ToolName, string> = {
   asana_search_tasks:
     "Search Asana tasks in a workspace by literal text and optional filters. Use this only for explicit keyword search requests.",
   asana_get_task: "Read a single Asana task by task GID.",
-  asana_create_task: "Create a new Asana task.",
+  asana_create_task:
+    "Create a new Asana task. Provide only one of dueOn or dueAt. If the user wants no due date, omit both.",
   asana_update_task:
-    "Update an existing Asana task. Use this to rename, reassign, change dates, or mark a task complete or incomplete.",
+    "Update an existing Asana task. Use this to rename, reassign, change dates, or mark a task complete or incomplete. Provide only one of dueOn or dueAt. To remove the due date, clear the existing due field instead of setting both.",
   asana_delete_task:
     "Delete an existing Asana task by task GID. Use this only when the user clearly asks to delete or remove the task."
 };
