@@ -57,12 +57,7 @@ export async function registerWhatsAppWebhookRoutes(
     }
 
     for (const message of parsed.messages) {
-      void enqueueOrProcessMessage(deps, {
-        from: message.from,
-        text: message.text,
-        messageId: message.messageId,
-        rawPayload: message.raw
-      });
+      void enqueueOrProcessMessage(deps, message);
     }
 
     return reply.code(200).send({ received: true });
@@ -94,7 +89,7 @@ async function enqueueOrProcessMessage(
 
   if (deps.queue) {
     try {
-      await deps.queue.add("inbound-text", data, {
+      await deps.queue.add(data.kind === "audio" ? "inbound-audio" : "inbound-text", data, {
         jobId: data.messageId
       });
       return;
@@ -104,7 +99,7 @@ async function enqueueOrProcessMessage(
   }
 
   setImmediate(() => {
-    deps.agent.processInboundWhatsAppText(data).catch((error) => {
+    deps.agent.processInboundWhatsAppMessage(data).catch((error) => {
       logger.error({ error }, "Inline WhatsApp message processing failed");
     });
   });

@@ -1,11 +1,29 @@
-export interface NormalizedWhatsAppInboundMessage {
+export interface NormalizedWhatsAppInboundTextMessage {
+  kind: "text";
   messageId: string;
   from: string;
   text: string;
   timestamp?: string;
-  type: "text";
   raw: unknown;
 }
+
+export interface NormalizedWhatsAppInboundAudioMessage {
+  kind: "audio";
+  messageId: string;
+  from: string;
+  mediaId: string;
+  mimeType?: string;
+  sha256?: string;
+  isVoice?: boolean;
+  timestamp?: string;
+  raw: unknown;
+}
+
+export type NormalizedWhatsAppInboundMessage =
+  | NormalizedWhatsAppInboundTextMessage
+  | NormalizedWhatsAppInboundAudioMessage;
+
+export type WhatsAppInboundMessagePayload = NormalizedWhatsAppInboundMessage;
 
 export interface NormalizedWhatsAppUnsupportedMessage {
   messageId?: string;

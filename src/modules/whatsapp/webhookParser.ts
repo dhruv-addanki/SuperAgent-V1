@@ -28,11 +28,26 @@ export function parseWhatsAppWebhook(payload: any): ParsedWhatsAppWebhook {
       for (const message of value?.messages ?? []) {
         if (message?.type === "text" && message.text?.body && message.from && message.id) {
           messages.push({
+            kind: "text",
             messageId: message.id,
             from: message.from,
             text: message.text.body,
             timestamp: message.timestamp,
-            type: "text",
+            raw: message
+          });
+          continue;
+        }
+
+        if (message?.type === "audio" && message.audio?.id && message.from && message.id) {
+          messages.push({
+            kind: "audio",
+            messageId: message.id,
+            from: message.from,
+            mediaId: message.audio.id,
+            mimeType: message.audio.mime_type,
+            sha256: message.audio.sha256,
+            isVoice: message.audio.voice,
+            timestamp: message.timestamp,
             raw: message
           });
           continue;

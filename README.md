@@ -6,6 +6,7 @@ The MVP is intentionally narrow:
 
 - Read Gmail, Google Calendar, and Google Drive.
 - Read and manage Asana tasks.
+- Accept typed WhatsApp messages and WhatsApp voice memos.
 - Create Gmail drafts.
 - Create calendar events and Google Docs with explicit approval where required.
 - Send Gmail drafts only after the user confirms with `SEND`.
@@ -123,6 +124,7 @@ OpenAI:
 
 - `OPENAI_API_KEY`: OpenAI API key.
 - `OPENAI_MODEL`: Defaults to `gpt-5.4`.
+- `OPENAI_TRANSCRIPTION_MODEL`: Speech-to-text model for WhatsApp voice memos, default `gpt-4o-mini-transcribe`.
 
 Public URLs:
 
@@ -136,6 +138,7 @@ WhatsApp:
 - `WHATSAPP_PHONE_NUMBER_ID`: Cloud API phone number ID.
 - `WHATSAPP_BUSINESS_ACCOUNT_ID`: WhatsApp Business Account ID.
 - `WHATSAPP_APP_SECRET`: Optional app secret for webhook signature verification hardening.
+- `WHATSAPP_MAX_AUDIO_BYTES`: Maximum inbound audio size to transcribe, default `25000000`.
 
 Google:
 
@@ -267,7 +270,7 @@ https://your-ngrok-domain.ngrok-free.app/webhooks/whatsapp
 4. Subscribe to the `messages` webhook field.
 5. Put `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` in `.env`.
 
-The POST route parses text messages first. Audio messages are logged as unsupported and ignored for now.
+The POST route accepts text messages and audio messages from WhatsApp voice memos. Audio is downloaded from WhatsApp, transcribed with OpenAI, and then handled by the same agent pipeline as typed text.
 
 ## Agent Tools
 

@@ -28,6 +28,7 @@ const envSchema = z
 
     OPENAI_API_KEY: z.string().min(1).default("dev-openai-key"),
     OPENAI_MODEL: z.string().min(1).default("gpt-5.4"),
+    OPENAI_TRANSCRIPTION_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
 
     APP_BASE_URL: z.string().url().default("http://localhost:3000"),
     WEBHOOK_PUBLIC_URL: z.string().optional().default(""),
@@ -37,6 +38,7 @@ const envSchema = z
     WHATSAPP_PHONE_NUMBER_ID: z.string().min(1).default("dev-phone-number-id"),
     WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().optional().default(""),
     WHATSAPP_APP_SECRET: z.string().optional().default(""),
+    WHATSAPP_MAX_AUDIO_BYTES: z.coerce.number().int().positive().default(25_000_000),
 
     GOOGLE_CLIENT_ID: z.string().min(1).default("dev-google-client-id"),
     GOOGLE_CLIENT_SECRET: z.string().min(1).default("dev-google-client-secret"),

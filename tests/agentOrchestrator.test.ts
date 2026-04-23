@@ -8,6 +8,7 @@ vi.mock("../src/modules/agent/responseLoop", () => ({
 
 import { AgentOrchestrator } from "../src/modules/agent/agentOrchestrator";
 import { ToolExecutor } from "../src/modules/agent/toolExecutor";
+import { UserFacingError } from "../src/lib/errors";
 
 describe("agent orchestrator", () => {
   afterEach(() => {
@@ -143,6 +144,197 @@ describe("agent orchestrator", () => {
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "Your Asana tasks due today:\n\n1. Test task 1"
+    );
+  });
+
+  it("transcribes voice messages before routing them through normal shortcuts", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            gid: "task_1",
+            name: "Voice task",
+            completed: false
+          }
+        ]
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const whatsappMediaService = {
+      downloadAudio: vi.fn(async () => ({
+        buffer: Buffer.from([1, 2, 3]),
+        filename: "audio-id.ogg",
+        mediaId: "audio-id",
+        mimeType: "audio/ogg",
+        sha256: "hash"
+      }))
+    };
+    const audioTranscriptionService = {
+      transcribe: vi.fn(async () => ({
+        text: "show my asana tasks due today",
+        model: "gpt-4o-mini-transcribe"
+      }))
+    };
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService,
+      {
+        whatsappMediaService,
+        audioTranscriptionService
+      }
+    );
+
+    await orchestrator.processInboundWhatsAppMessage({
+      kind: "audio",
+      from: "+15555550100",
+      messageId: "wamid.audio",
+      mediaId: "audio-id",
+      mimeType: "audio/ogg; codecs=opus",
+      sha256: "hash",
+      isVoice: true,
+      raw: { type: "audio" }
+    });
+
+    expect(whatsappMediaService.downloadAudio).toHaveBeenCalledWith({
+      mediaId: "audio-id",
+      mimeType: "audio/ogg; codecs=opus",
+      sha256: "hash"
+    });
+    expect(audioTranscriptionService.transcribe).toHaveBeenCalledWith({
+      buffer: Buffer.from([1, 2, 3]),
+      filename: "audio-id.ogg",
+      mimeType: "audio/ogg"
+    });
+    expect(prisma.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          role: "USER",
+          content: "show my asana tasks due today",
+          rawPayload: expect.objectContaining({
+            kind: "audio",
+            transcription: { model: "gpt-4o-mini-transcribe" }
+          })
+        })
+      })
+    );
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.objectContaining({ completed: false, limit: 20 }),
+      expect.objectContaining({ latestUserMessage: "show my asana tasks due today" })
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Your Asana tasks due today:\n\n1. Voice task"
+    );
+  });
+
+  it("replies with the transcription failure without invoking the agent loop", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const whatsappMediaService = {
+      downloadAudio: vi.fn(async () => ({
+        buffer: Buffer.from([1]),
+        filename: "audio-id.ogg",
+        mediaId: "audio-id",
+        mimeType: "audio/ogg"
+      }))
+    };
+    const audioTranscriptionService = {
+      transcribe: vi.fn(async () => {
+        throw new UserFacingError(
+          "Audio transcript empty",
+          "AUDIO_TRANSCRIPT_EMPTY",
+          "I didn't catch any speech in that voice message."
+        );
+      })
+    };
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService,
+      {
+        whatsappMediaService,
+        audioTranscriptionService
+      }
+    );
+
+    await orchestrator.processInboundWhatsAppMessage({
+      kind: "audio",
+      from: "+15555550100",
+      messageId: "wamid.audio",
+      mediaId: "audio-id",
+      raw: { type: "audio" }
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "I didn't catch any speech in that voice message."
     );
   });
 });

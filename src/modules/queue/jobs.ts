@@ -8,7 +8,7 @@ export function registerWhatsappWorker(agent: AgentOrchestrator): Worker<Inbound
   const worker = new Worker<InboundWhatsAppJobData>(
     WHATSAPP_INBOUND_QUEUE,
     async (job) => {
-      await agent.processInboundWhatsAppText(job.data);
+      await agent.processInboundWhatsAppMessage(job.data);
     },
     {
       connection: getBullMQConnectionOptions(),

@@ -9,7 +9,10 @@ import { env } from "../../config/env";
 import { logger } from "../../config/logger";
 import type { ResponsesClient } from "../../lib/openaiClient";
 import { userMessageForError } from "../../lib/errors";
+import { AudioTranscriptionService } from "../audio/audioTranscriptionService";
 import { WhatsAppService } from "../whatsapp/whatsappService";
+import { WhatsAppMediaService } from "../whatsapp/whatsappMediaService";
+import type { WhatsAppInboundMessagePayload } from "../whatsapp/whatsappTypes";
 import { AsanaTokenService } from "../asana/tokenService";
 import { GoogleTokenService } from "../google/tokenService";
 import { LongTermMemory } from "../memory/longTermMemory";
@@ -46,24 +49,52 @@ export interface InboundWhatsAppTextInput {
   rawPayload?: unknown;
 }
 
+interface PreparedInboundText {
+  from: string;
+  text: string;
+  messageId?: string;
+  rawPayload?: unknown;
+}
+
+interface AgentOrchestratorOptions {
+  whatsappMediaService?: Pick<WhatsAppMediaService, "downloadAudio">;
+  audioTranscriptionService?: Pick<AudioTranscriptionService, "transcribe">;
+}
+
 export class AgentOrchestrator {
   private readonly toolExecutor: ToolExecutor;
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
+  private readonly whatsappMediaService: Pick<WhatsAppMediaService, "downloadAudio">;
+  private readonly audioTranscriptionService: Pick<AudioTranscriptionService, "transcribe">;
 
   constructor(
     private readonly prisma: PrismaClient,
     private readonly responsesClient: ResponsesClient,
-    private readonly whatsappService: WhatsAppService
+    private readonly whatsappService: WhatsAppService,
+    options: AgentOrchestratorOptions = {}
   ) {
     const googleTokenService = new GoogleTokenService(prisma);
     const asanaTokenService = new AsanaTokenService(prisma);
     this.toolExecutor = new ToolExecutor(prisma, googleTokenService, asanaTokenService);
     this.shortTermMemory = new ShortTermMemory(prisma);
     this.longTermMemory = new LongTermMemory(prisma);
+    this.whatsappMediaService = options.whatsappMediaService ?? new WhatsAppMediaService();
+    this.audioTranscriptionService =
+      options.audioTranscriptionService ?? new AudioTranscriptionService();
   }
 
   async processInboundWhatsAppText(input: InboundWhatsAppTextInput): Promise<void> {
+    await this.processInboundWhatsAppMessage({
+      kind: "text",
+      from: input.from,
+      text: input.text,
+      messageId: input.messageId ?? "",
+      raw: input.rawPayload ?? null
+    });
+  }
+
+  async processInboundWhatsAppMessage(input: WhatsAppInboundMessagePayload): Promise<void> {
     const phone = normalizePhone(input.from);
     const user = await this.prisma.user.upsert({
       where: { whatsappPhone: phone },
@@ -73,13 +104,6 @@ export class AgentOrchestrator {
 
     const conversation = await getOrCreateWhatsAppConversation(this.prisma, user.id);
 
-    await persistMessage(this.prisma, {
-      conversationId: conversation.id,
-      role: MessageRole.USER,
-      content: input.text,
-      rawPayload: input.rawPayload
-    });
-
     try {
       if (input.messageId) {
         this.whatsappService.sendTypingIndicator(input.messageId).catch((error) => {
@@ -87,19 +111,28 @@ export class AgentOrchestrator {
         });
       }
 
-      const confirmationIntent = parseConfirmationIntent(input.text);
+      const preparedInput = await this.prepareInboundText(input);
+
+      await persistMessage(this.prisma, {
+        conversationId: conversation.id,
+        role: MessageRole.USER,
+        content: preparedInput.text,
+        rawPayload: preparedInput.rawPayload
+      });
+
+      const confirmationIntent = parseConfirmationIntent(preparedInput.text);
       if (confirmationIntent) {
         const handled = await this.handleConfirmationIntent({
           intent: confirmationIntent,
-          to: input.from,
+          to: preparedInput.from,
           user,
           conversation,
-          latestUserMessage: input.text
+          latestUserMessage: preparedInput.text
         });
         if (handled) return;
       }
 
-      const genericCalendarOverview = matchGenericCalendarOverviewRequest(input.text);
+      const genericCalendarOverview = matchGenericCalendarOverviewRequest(preparedInput.text);
       if (genericCalendarOverview) {
         const window = calendarOverviewWindow(genericCalendarOverview, user.timezone);
         const result = await this.toolExecutor.executeToolCall(
@@ -112,14 +145,14 @@ export class AgentOrchestrator {
           {
             user,
             conversation,
-            latestUserMessage: input.text
+            latestUserMessage: preparedInput.text
           }
         );
 
         if (!result.ok) {
           await this.reply(
             conversation.id,
-            input.from,
+            preparedInput.from,
             result.userMessage ?? "I couldn't reach Google Calendar right now."
           );
           return;
@@ -127,13 +160,13 @@ export class AgentOrchestrator {
 
         await this.reply(
           conversation.id,
-          input.from,
+          preparedInput.from,
           formatCalendarOverview((result.data as CalendarEventSummary[] | undefined) ?? [], user.timezone, window.label)
         );
         return;
       }
 
-      const genericAsanaTaskOverview = matchGenericAsanaMyTasksRequest(input.text);
+      const genericAsanaTaskOverview = matchGenericAsanaMyTasksRequest(preparedInput.text);
       if (genericAsanaTaskOverview) {
         const result = await this.toolExecutor.executeToolCall(
           "asana_list_my_tasks",
@@ -145,14 +178,14 @@ export class AgentOrchestrator {
           {
             user,
             conversation,
-            latestUserMessage: input.text
+            latestUserMessage: preparedInput.text
           }
         );
 
         if (!result.ok) {
           await this.reply(
             conversation.id,
-            input.from,
+            preparedInput.from,
             result.userMessage ?? "I couldn't reach Asana right now."
           );
           return;
@@ -160,7 +193,7 @@ export class AgentOrchestrator {
 
         await this.reply(
           conversation.id,
-          input.from,
+          preparedInput.from,
           formatAsanaTaskOverview(
             (result.data as AsanaTaskSummary[] | undefined) ?? [],
             genericAsanaTaskOverview
@@ -169,7 +202,7 @@ export class AgentOrchestrator {
         return;
       }
 
-      await this.longTermMemory.maybeExtractMemoryFromConversation(user.id, input.text);
+      await this.longTermMemory.maybeExtractMemoryFromConversation(user.id, preparedInput.text);
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memory = await this.longTermMemory.getRelevantMemoryForPrompt(user.id);
@@ -196,16 +229,58 @@ export class AgentOrchestrator {
           this.toolExecutor.executeToolCall(toolName, toolInput, {
             user,
             conversation,
-            latestUserMessage: input.text
+            latestUserMessage: preparedInput.text
           }),
         maxToolRounds: env.MAX_TOOL_ROUNDS
       });
 
-      await this.reply(conversation.id, input.from, result.assistantMessage);
+      await this.reply(conversation.id, preparedInput.from, result.assistantMessage);
     } catch (error) {
       logger.error({ error }, "Failed to process inbound WhatsApp message");
       await this.reply(conversation.id, input.from, userMessageForError(error));
     }
+  }
+
+  private async prepareInboundText(
+    input: WhatsAppInboundMessagePayload
+  ): Promise<PreparedInboundText> {
+    if (input.kind === "text") {
+      return {
+        from: input.from,
+        text: input.text,
+        messageId: input.messageId,
+        rawPayload: input.raw
+      };
+    }
+
+    const media = await this.whatsappMediaService.downloadAudio({
+      mediaId: input.mediaId,
+      mimeType: input.mimeType,
+      sha256: input.sha256
+    });
+    const transcription = await this.audioTranscriptionService.transcribe({
+      buffer: media.buffer,
+      filename: media.filename,
+      mimeType: media.mimeType
+    });
+
+    return {
+      from: input.from,
+      text: transcription.text,
+      messageId: input.messageId,
+      rawPayload: {
+        kind: "audio",
+        mediaId: input.mediaId,
+        mimeType: input.mimeType,
+        downloadedMimeType: media.mimeType,
+        sha256: media.sha256,
+        isVoice: input.isVoice,
+        transcription: {
+          model: transcription.model
+        },
+        raw: input.raw
+      }
+    };
   }
 
   private async handleConfirmationIntent(input: {

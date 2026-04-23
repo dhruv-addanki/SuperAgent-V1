@@ -1,14 +1,10 @@
 import { Queue } from "bullmq";
 import { getBullMQConnectionOptions } from "../../lib/redis";
+import type { WhatsAppInboundMessagePayload } from "../whatsapp/whatsappTypes";
 
 export const WHATSAPP_INBOUND_QUEUE = "whatsapp-inbound";
 
-export interface InboundWhatsAppJobData {
-  from: string;
-  text: string;
-  messageId?: string;
-  rawPayload?: unknown;
-}
+export type InboundWhatsAppJobData = WhatsAppInboundMessagePayload;
 
 export function createWhatsAppInboundQueue(): Queue<InboundWhatsAppJobData> {
   return new Queue<InboundWhatsAppJobData>(WHATSAPP_INBOUND_QUEUE, {
