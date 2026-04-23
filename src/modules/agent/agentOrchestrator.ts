@@ -36,11 +36,19 @@ import {
 import {
   asanaTaskDueDate,
   formatAsanaTaskOverview,
+  formatAsanaTodayAndLatestOpenReply,
+  formatLatestAsanaTaskReply,
+  formatScopedAsanaTaskList,
+  matchAmbiguousAsanaBulkCompleteRequest,
+  matchAsanaDueTodayAndLatestOpenRequest,
+  matchAsanaLatestTaskShortcut,
+  matchAsanaListShortcut,
   matchGenericAsanaMyTasksRequest
 } from "./asanaReadShortcut";
 import {
   calendarOverviewWindow,
   formatCalendarOverview,
+  matchCalendarAllCalendarsFollowUpRequest,
   matchGenericCalendarOverviewRequest
 } from "./calendarReadShortcut";
 import type { AsanaTaskSummary } from "../asana/asanaTypes";
@@ -124,6 +132,11 @@ export class AgentOrchestrator {
         rawPayload: preparedInput.rawPayload
       });
 
+      await this.longTermMemory.maybeExtractMemoryFromConversation(user.id, preparedInput.text);
+
+      const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
+      const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
+
       const confirmationIntent = parseConfirmationIntent(preparedInput.text);
       if (confirmationIntent) {
         const handled = await this.handleConfirmationIntent({
@@ -136,7 +149,25 @@ export class AgentOrchestrator {
         if (handled) return;
       }
 
-      const genericCalendarOverview = matchGenericCalendarOverviewRequest(preparedInput.text);
+      const ambiguousBulkComplete = matchAmbiguousAsanaBulkCompleteRequest(
+        preparedInput.text,
+        memoryEntries
+      );
+      if (ambiguousBulkComplete) {
+        const scopeLabel = ambiguousBulkComplete.projectName
+          ? `${ambiguousBulkComplete.taskCount} listed tasks in ${ambiguousBulkComplete.projectName}`
+          : `${ambiguousBulkComplete.taskCount} listed tasks`;
+        await this.reply(
+          conversation.id,
+          preparedInput.from,
+          `Do you mean ${scopeLabel}, or every incomplete Asana task I can see?`
+        );
+        return;
+      }
+
+      const genericCalendarOverview =
+        matchGenericCalendarOverviewRequest(preparedInput.text) ??
+        matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history);
       if (genericCalendarOverview) {
         const window = calendarOverviewWindow(genericCalendarOverview, user.timezone);
         const result = await this.toolExecutor.executeToolCall(
@@ -166,6 +197,181 @@ export class AgentOrchestrator {
           conversation.id,
           preparedInput.from,
           formatCalendarOverview((result.data as CalendarEventSummary[] | undefined) ?? [], user.timezone, window.label)
+        );
+        return;
+      }
+
+      const asanaTodayAndLatestOpen = matchAsanaDueTodayAndLatestOpenRequest(
+        preparedInput.text,
+        history,
+        memoryEntries,
+        user.timezone
+      );
+      if (asanaTodayAndLatestOpen) {
+        const [todayResult, latestOpenResult] = await Promise.all([
+          this.toolExecutor.executeToolCall(
+            "asana_list_my_tasks",
+            {
+              dueOn: asanaTodayAndLatestOpen.dueOn,
+              completed: false,
+              limit: 20,
+              sortBy: "due",
+              sortDirection: "asc"
+            },
+            {
+              user,
+              conversation,
+              latestUserMessage: preparedInput.text
+            }
+          ),
+          this.toolExecutor.executeToolCall(
+            "asana_list_my_tasks",
+            {
+              completed: false,
+              limit: 1,
+              sortBy: "modifiedAt",
+              sortDirection: "desc"
+            },
+            {
+              user,
+              conversation,
+              latestUserMessage: preparedInput.text
+            }
+          )
+        ]);
+
+        if (!todayResult.ok) {
+          await this.reply(
+            conversation.id,
+            preparedInput.from,
+            todayResult.userMessage ?? "I couldn't load your Asana tasks right now. Try again in a moment."
+          );
+          return;
+        }
+
+        if (!latestOpenResult.ok) {
+          await this.reply(
+            conversation.id,
+            preparedInput.from,
+            latestOpenResult.userMessage ?? "I couldn't load your latest Asana task right now. Try again in a moment."
+          );
+          return;
+        }
+
+        await this.reply(
+          conversation.id,
+          preparedInput.from,
+          formatAsanaTodayAndLatestOpenReply(
+            (todayResult.data as AsanaTaskSummary[] | undefined) ?? [],
+            ((latestOpenResult.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null,
+            user.timezone,
+            asanaTodayAndLatestOpen.label
+          )
+        );
+        return;
+      }
+
+      const asanaLatestShortcut = matchAsanaLatestTaskShortcut(
+        preparedInput.text,
+        history,
+        memoryEntries
+      );
+      if (asanaLatestShortcut) {
+        const toolName =
+          asanaLatestShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
+        const result = await this.toolExecutor.executeToolCall(
+          toolName,
+          {
+            ...(asanaLatestShortcut.project
+              ? { projectGid: asanaLatestShortcut.project.projectGid }
+              : {}),
+            completed: asanaLatestShortcut.completed,
+            limit: asanaLatestShortcut.limit,
+            sortBy: asanaLatestShortcut.sortBy,
+            sortDirection: asanaLatestShortcut.sortDirection
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+
+        if (!result.ok) {
+          await this.reply(
+            conversation.id,
+            preparedInput.from,
+            result.userMessage ?? "I couldn't load that Asana task right now. Try again in a moment."
+          );
+          return;
+        }
+
+        await this.reply(
+          conversation.id,
+          preparedInput.from,
+          formatLatestAsanaTaskReply(
+            ((result.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null,
+            {
+              label: asanaLatestShortcut.label,
+              timezone: user.timezone,
+              scopeName: asanaLatestShortcut.project?.name,
+              completed: asanaLatestShortcut.completed
+            }
+          )
+        );
+        return;
+      }
+
+      const asanaListShortcut = matchAsanaListShortcut(
+        preparedInput.text,
+        history,
+        memoryEntries,
+        user.timezone
+      );
+      if (asanaListShortcut) {
+        const toolName =
+          asanaListShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
+        const result = await this.toolExecutor.executeToolCall(
+          toolName,
+          {
+            ...(asanaListShortcut.project
+              ? { projectGid: asanaListShortcut.project.projectGid }
+              : {}),
+            completed: asanaListShortcut.completed,
+            dueOn: asanaListShortcut.dueOn,
+            dueBefore: asanaListShortcut.dueBefore,
+            limit: asanaListShortcut.limit,
+            sortBy: asanaListShortcut.sortBy,
+            sortDirection: asanaListShortcut.sortDirection
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+
+        if (!result.ok) {
+          await this.reply(
+            conversation.id,
+            preparedInput.from,
+            result.userMessage ?? "I couldn't load those Asana tasks right now. Try again in a moment."
+          );
+          return;
+        }
+
+        await this.reply(
+          conversation.id,
+          preparedInput.from,
+          formatScopedAsanaTaskList(
+            (result.data as AsanaTaskSummary[] | undefined) ?? [],
+            {
+              label: asanaListShortcut.label,
+              emptyLabel: `I don't see open Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
+              scopeName: asanaListShortcut.project?.name,
+              emphasizeImportance: asanaListShortcut.emphasizeImportance
+            }
+          )
         );
         return;
       }
@@ -206,10 +412,6 @@ export class AgentOrchestrator {
         return;
       }
 
-      await this.longTermMemory.maybeExtractMemoryFromConversation(user.id, preparedInput.text);
-
-      const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
-      const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
       const pendingAction = await resolvePendingActionFromConversation(
         this.prisma,
         user.id,

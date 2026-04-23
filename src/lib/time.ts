@@ -1,5 +1,5 @@
 import { addMinutes } from "date-fns";
-import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { env } from "../config/env";
 import { DEFAULT_TIMEZONE } from "../config/constants";
 
@@ -17,8 +17,14 @@ export function formatForUser(date: Date | string, timezone = DEFAULT_TIMEZONE):
 
 export function startOfTomorrowIso(timezone = DEFAULT_TIMEZONE, baseDate = now()): string {
   const zoned = toZonedTime(baseDate, timezone);
-  const tomorrow = new Date(zoned);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-  return tomorrow.toISOString();
+  const localTomorrowMidnight = new Date(
+    zoned.getFullYear(),
+    zoned.getMonth(),
+    zoned.getDate() + 1,
+    0,
+    0,
+    0,
+    0
+  );
+  return fromZonedTime(localTomorrowMidnight, timezone).toISOString();
 }

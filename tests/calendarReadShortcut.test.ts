@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calendarOverviewWindow,
   formatCalendarOverview,
+  matchCalendarAllCalendarsFollowUpRequest,
   matchGenericCalendarOverviewRequest
 } from "../src/modules/agent/calendarReadShortcut";
 
@@ -12,12 +13,13 @@ describe("calendar read shortcut", () => {
     expect(matchGenericCalendarOverviewRequest("Check all my calendars tomorrow")).toBe(
       "tomorrow"
     );
+    expect(matchGenericCalendarOverviewRequest("Check my calendar")).toBe("today");
     expect(matchGenericCalendarOverviewRequest("What's on my meetings calendar today?")).toBe(
       null
     );
   });
 
-  it("builds a day window and formats an all-calendar overview", () => {
+  it("builds a timezone-correct day window and formats an all-calendar overview", () => {
     const window = calendarOverviewWindow(
       "today",
       "America/New_York",
@@ -25,7 +27,8 @@ describe("calendar read shortcut", () => {
     );
 
     expect(window.label).toBe("today");
-    expect(window.timeMin).not.toBe(window.timeMax);
+    expect(window.timeMin).toBe("2026-04-21T04:00:00.000Z");
+    expect(window.timeMax).toBe("2026-04-22T04:00:00.000Z");
 
     const message = formatCalendarOverview(
       [
@@ -49,5 +52,16 @@ describe("calendar read shortcut", () => {
     expect(message).toContain("Across all calendars today:");
     expect(message).toContain("Breakfast (General)");
     expect(message).toContain("All day — All day note (Personal)");
+  });
+
+  it("matches positive follow-ups to an all-calendar check", () => {
+    expect(
+      matchCalendarAllCalendarsFollowUpRequest("Check them all yes", [
+        {
+          role: "assistant",
+          content: "Nothing matched on that calendar today.\n\nWant me to check all calendars for today instead?"
+        }
+      ])
+    ).toBe("today");
   });
 });

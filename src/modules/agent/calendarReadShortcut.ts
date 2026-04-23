@@ -1,5 +1,6 @@
-import { formatInTimeZone, toZonedTime } from "date-fns-tz";
+import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import type { CalendarEventSummary } from "../google/googleTypes";
+import type { ResponseInputItem } from "../../lib/openaiClient";
 
 export type GenericCalendarOverviewTarget = "today" | "tomorrow";
 
@@ -22,7 +23,26 @@ export function matchGenericCalendarOverviewRequest(
   if (!referencesGenericCalendar || !asksForOverview) return null;
   if (/\btomorrow\b/.test(normalized)) return "tomorrow";
   if (/\btoday\b/.test(normalized)) return "today";
-  return null;
+  return "today";
+}
+
+export function matchCalendarAllCalendarsFollowUpRequest(
+  text: string,
+  history: ResponseInputItem[]
+): GenericCalendarOverviewTarget | null {
+  const normalized = text.trim().toLowerCase();
+  const affirmative =
+    /^(yes|yep|yeah|sure|ok|okay|do it|go ahead)\b/.test(normalized) ||
+    /\bcheck (them|it) all\b/.test(normalized) ||
+    /\ball calendars\b/.test(normalized);
+
+  if (!affirmative) return null;
+
+  const previousAssistant = lastAssistantMessage(history);
+  if (!previousAssistant) return null;
+  if (!/all calendars/.test(previousAssistant)) return null;
+  if (/tomorrow/.test(previousAssistant)) return "tomorrow";
+  return "today";
 }
 
 export function calendarOverviewWindow(
@@ -54,10 +74,16 @@ export function formatCalendarOverview(
 
 function startOfDayOffsetIso(timezone: string, offsetDays: number, baseDate: Date): string {
   const zoned = toZonedTime(baseDate, timezone);
-  const day = new Date(zoned);
-  day.setDate(day.getDate() + offsetDays);
-  day.setHours(0, 0, 0, 0);
-  return day.toISOString();
+  const localMidnight = new Date(
+    zoned.getFullYear(),
+    zoned.getMonth(),
+    zoned.getDate() + offsetDays,
+    0,
+    0,
+    0,
+    0
+  );
+  return fromZonedTime(localMidnight, timezone).toISOString();
 }
 
 function formatEventLine(event: CalendarEventSummary, timezone: string): string {
@@ -82,4 +108,15 @@ function formatTimeRange(event: CalendarEventSummary, timezone: string): string 
 
 function isAllDay(value: string): boolean {
   return !value.includes("T");
+}
+
+function lastAssistantMessage(history: ResponseInputItem[]): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index];
+    if (item?.role !== "assistant") continue;
+    const content = typeof item.content === "string" ? item.content : null;
+    if (content) return content.toLowerCase();
+  }
+
+  return null;
 }

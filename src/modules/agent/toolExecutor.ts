@@ -264,12 +264,16 @@ export class ToolExecutor {
       taskGid: task.gid,
       name: task.name,
       completed: task.completed,
+      completedAt: task.completedAt,
       dueOn: task.dueOn,
       dueAt: task.dueAt,
       assigneeGid: task.assigneeGid,
       assigneeName: task.assigneeName,
       workspaceGid: task.workspaceGid,
       workspaceName: task.workspaceName,
+      createdAt: task.createdAt,
+      modifiedAt: task.modifiedAt,
+      projectName: task.projects?.[0]?.name,
       permalinkUrl: task.permalinkUrl
     }));
 
@@ -650,14 +654,18 @@ export class ToolExecutor {
                 completed: input.completed,
                 dueOn: input.dueOn,
                 dueBefore: input.dueBefore,
-                limit: input.limit
+                limit: input.limit,
+                sortBy: input.sortBy,
+                sortDirection: input.sortDirection
               })
             : await service.listMyTasks({
                 workspaceGid: workspaceGid!,
                 completed: input.completed,
                 dueOn: input.dueOn,
                 dueBefore: input.dueBefore,
-                limit: input.limit
+                limit: input.limit,
+                sortBy: input.sortBy,
+                sortDirection: input.sortDirection
               });
           if (workspaceGid) {
             await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });

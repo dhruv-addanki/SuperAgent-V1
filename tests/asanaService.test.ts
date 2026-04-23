@@ -199,6 +199,44 @@ describe("asana service", () => {
     expect(tasks[0]).toMatchObject({ gid: "task_1", name: "Today" });
   });
 
+  it("sorts latest completed project tasks by completed_at", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            gid: "task_1",
+            name: "Earlier complete",
+            completed: true,
+            completed_at: "2026-04-23T12:00:00.000Z"
+          },
+          {
+            gid: "task_2",
+            name: "Latest complete",
+            completed: true,
+            completed_at: "2026-04-23T19:00:00.000Z"
+          }
+        ]
+      })
+    });
+
+    const tasks = await new AsanaService("token").listProjectTasks({
+      projectGid: "project_1",
+      completed: true,
+      sortBy: "completedAt",
+      sortDirection: "desc",
+      limit: 1
+    });
+
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        gid: "task_2",
+        name: "Latest complete",
+        completedAt: "2026-04-23T19:00:00.000Z"
+      })
+    ]);
+  });
+
   it("maps expired auth failures", async () => {
     fetchMock.mockResolvedValue({
       ok: false,

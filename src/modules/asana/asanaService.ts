@@ -17,6 +17,7 @@ const TASK_FIELDS = [
   "gid",
   "name",
   "completed",
+  "completed_at",
   "notes",
   "due_on",
   "due_at",
@@ -85,6 +86,7 @@ function normalizeTask(task: any): AsanaTaskDetail {
     gid: task.gid ?? "",
     name: task.name ?? "(Untitled task)",
     completed: Boolean(task.completed),
+    completedAt: task.completed_at ?? undefined,
     notes: task.notes ?? undefined,
     dueOn: task.due_on ?? undefined,
     dueAt: task.due_at ?? undefined,
@@ -123,6 +125,12 @@ function dueDate(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">): string | unde
   return undefined;
 }
 
+function timeValue(value?: string): number {
+  if (!value) return Number.NaN;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? Number.NaN : timestamp;
+}
+
 function beforeDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueBefore?: string): boolean {
   if (!dueBefore) return true;
   const filterTimestamp =
@@ -148,15 +156,63 @@ function completedSinceForSelection(completed?: boolean): string {
 
 function filterTasks(
   tasks: AsanaTaskSummary[],
-  input: { completed?: boolean; dueBefore?: string; dueOn?: string; limit?: number }
+  input: {
+    completed?: boolean;
+    dueBefore?: string;
+    dueOn?: string;
+    limit?: number;
+    sortBy?: "due" | "createdAt" | "modifiedAt" | "completedAt";
+    sortDirection?: "asc" | "desc";
+  }
 ): AsanaTaskSummary[] {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
-
-  return tasks
+  const filtered = tasks
     .filter((task) => (input.completed === undefined ? true : task.completed === input.completed))
     .filter((task) => matchesDueDate(task, input.dueOn))
-    .filter((task) => beforeDue(task, input.dueBefore))
-    .slice(0, limit);
+    .filter((task) => beforeDue(task, input.dueBefore));
+
+  const sorted = sortTasks(filtered, input.sortBy, input.sortDirection);
+  return sorted.slice(0, limit);
+}
+
+function sortTasks(
+  tasks: AsanaTaskSummary[],
+  sortBy?: "due" | "createdAt" | "modifiedAt" | "completedAt",
+  sortDirection: "asc" | "desc" = "asc"
+): AsanaTaskSummary[] {
+  if (!sortBy) return tasks;
+
+  const direction = sortDirection === "desc" ? -1 : 1;
+  const copy = [...tasks];
+
+  copy.sort((left, right) => {
+    let leftValue: number;
+    let rightValue: number;
+
+    if (sortBy === "due") {
+      leftValue = dueTimestamp(left);
+      rightValue = dueTimestamp(right);
+    } else if (sortBy === "createdAt") {
+      leftValue = timeValue(left.createdAt);
+      rightValue = timeValue(right.createdAt);
+    } else if (sortBy === "modifiedAt") {
+      leftValue = timeValue(left.modifiedAt);
+      rightValue = timeValue(right.modifiedAt);
+    } else {
+      leftValue = timeValue(left.completedAt);
+      rightValue = timeValue(right.completedAt);
+    }
+
+    if (Number.isNaN(leftValue) && Number.isNaN(rightValue)) {
+      return left.name.localeCompare(right.name);
+    }
+    if (Number.isNaN(leftValue)) return 1;
+    if (Number.isNaN(rightValue)) return -1;
+    if (leftValue === rightValue) return left.name.localeCompare(right.name);
+    return (leftValue - rightValue) * direction;
+  });
+
+  return copy;
 }
 
 export class AsanaService {
@@ -259,6 +315,8 @@ export class AsanaService {
     dueBefore?: string;
     dueOn?: string;
     limit?: number;
+    sortBy?: "due" | "createdAt" | "modifiedAt" | "completedAt";
+    sortDirection?: "asc" | "desc";
   }): Promise<AsanaTaskSummary[]> {
     const fetchLimit = Math.min(Math.max((input.limit ?? 20) * 5, 50), MAX_COLLECTION_ITEMS);
     const pageSize = Math.min(fetchLimit, 100);
@@ -316,6 +374,8 @@ export class AsanaService {
     dueBefore?: string;
     dueOn?: string;
     limit?: number;
+    sortBy?: "due" | "createdAt" | "modifiedAt" | "completedAt";
+    sortDirection?: "asc" | "desc";
   }): Promise<AsanaTaskSummary[]> {
     const fetchLimit = Math.min(Math.max((input.limit ?? 20) * 5, 50), MAX_COLLECTION_ITEMS);
     const pageSize = Math.min(fetchLimit, 100);

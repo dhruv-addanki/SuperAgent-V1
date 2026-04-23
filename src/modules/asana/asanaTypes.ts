@@ -31,6 +31,7 @@ export interface AsanaTaskSummary {
   gid: string;
   name: string;
   completed: boolean;
+  completedAt?: string;
   notes?: string;
   dueOn?: string;
   dueAt?: string;
@@ -39,16 +40,15 @@ export interface AsanaTaskSummary {
   permalinkUrl?: string;
   workspaceGid?: string;
   workspaceName?: string;
+  createdAt?: string;
+  modifiedAt?: string;
   projects?: Array<{
     gid: string;
     name: string;
   }>;
 }
 
-export interface AsanaTaskDetail extends AsanaTaskSummary {
-  createdAt?: string;
-  modifiedAt?: string;
-}
+export type AsanaTaskDetail = AsanaTaskSummary;
 
 export interface AsanaDeletedTaskResult {
   taskGid: string;

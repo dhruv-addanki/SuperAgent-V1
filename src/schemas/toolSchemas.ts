@@ -10,6 +10,8 @@ const toJsonSchema = zodToJsonSchema as unknown as (
 const isoDate = z.string().datetime({ offset: true });
 const isoDateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const isoDateOrDateTime = z.union([isoDate, isoDateOnly]);
+const asanaSortBy = z.enum(["due", "createdAt", "modifiedAt", "completedAt"]);
+const sortDirection = z.enum(["asc", "desc"]);
 
 export const toolInputSchemas = {
   gmail_search_threads: z
@@ -168,7 +170,9 @@ export const toolInputSchemas = {
       completed: z.boolean().optional(),
       dueOn: isoDateOnly.optional(),
       dueBefore: isoDateOrDateTime.optional(),
-      limit: z.number().int().positive().max(100).optional()
+      limit: z.number().int().positive().max(100).optional(),
+      sortBy: asanaSortBy.optional(),
+      sortDirection: sortDirection.optional()
     })
     .strict(),
 
@@ -178,7 +182,9 @@ export const toolInputSchemas = {
       completed: z.boolean().optional(),
       dueOn: isoDateOnly.optional(),
       dueBefore: isoDateOrDateTime.optional(),
-      limit: z.number().int().positive().max(100).optional()
+      limit: z.number().int().positive().max(100).optional(),
+      sortBy: asanaSortBy.optional(),
+      sortDirection: sortDirection.optional()
     })
     .strict(),
 

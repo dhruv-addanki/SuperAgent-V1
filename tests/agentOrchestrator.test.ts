@@ -203,7 +203,9 @@ describe("agent orchestrator", () => {
       expect.objectContaining({
         dueOn: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         completed: false,
-        limit: 20
+        limit: 50,
+        sortBy: "due",
+        sortDirection: "asc"
       }),
       expect.objectContaining({
         latestUserMessage: "show my asana tasks due today"
@@ -212,7 +214,7 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Your Asana tasks due today:\n\n1. Test task 1"
+      "Here are the open Asana tasks due today:\n\n1. Test task 1"
     );
   });
 
@@ -322,13 +324,18 @@ describe("agent orchestrator", () => {
     );
     expect(executeToolCallSpy).toHaveBeenCalledWith(
       "asana_list_my_tasks",
-      expect.objectContaining({ completed: false, limit: 20 }),
+      expect.objectContaining({
+        completed: false,
+        limit: 50,
+        sortBy: "due",
+        sortDirection: "asc"
+      }),
       expect.objectContaining({ latestUserMessage: "show my asana tasks due today" })
     );
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Your Asana tasks due today:\n\n1. Voice task"
+      "Here are the open Asana tasks due today:\n\n1. Voice task"
     );
   });
 
@@ -404,6 +411,315 @@ describe("agent orchestrator", () => {
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "I didn't catch any speech in that voice message."
+    );
+  });
+
+  it("defaults generic calendar checks to today across all calendars", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            title: "CS 3744",
+            start: "2026-04-23T12:00:00.000Z",
+            end: "2026-04-23T13:15:00.000Z"
+          }
+        ]
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Check my calendar"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "calendar_list_events",
+      expect.objectContaining({
+        maxResults: 50
+      }),
+      expect.objectContaining({
+        latestUserMessage: "Check my calendar"
+      })
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Across all calendars today:")
+    );
+  });
+
+  it("asks for clarification before ambiguous Asana bulk-complete commands", async () => {
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: "assistant", content: "Here are the open Asana tasks in Scanis:\n\n1. test 1\n2. test 2" }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_asana_tasks",
+            value: [
+              { taskGid: "task_1", name: "test 1", projectName: "Scanis" },
+              { taskGid: "task_2", name: "test 2", projectName: "Scanis" }
+            ],
+            updatedAt: new Date("2026-04-23T15:00:00.000Z")
+          }
+        ])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Mark all tasks as complete"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Do you mean 2 listed tasks in Scanis, or every incomplete Asana task I can see?"
+    );
+  });
+
+  it("short-circuits Asana date-history requests across all projects", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            gid: "task_1",
+            name: "April task",
+            completed: false,
+            projects: [{ gid: "project_1", name: "Business" }]
+          }
+        ]
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: "assistant", content: "Earlier Asana reply" }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_asana_tasks",
+            value: [{ taskGid: "task_0", name: "old task" }],
+            updatedAt: new Date("2026-04-23T15:00:00.000Z")
+          }
+        ])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Check my tasks from April 11th across all projects"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.objectContaining({
+        dueOn: "2026-04-11",
+        completed: false,
+        sortBy: "due",
+        sortDirection: "asc"
+      }),
+      expect.objectContaining({
+        latestUserMessage: "Check my tasks from April 11th across all projects"
+      })
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Here are the open Asana tasks due on Apr 11:")
+    );
+  });
+
+  it("short-circuits latest completed task requests using recent project context", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            gid: "task_2",
+            name: "test 2",
+            completed: true,
+            completedAt: "2026-04-23T19:16:00.000Z"
+          }
+        ]
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: "assistant", content: "Here are the open Asana tasks in Scanis:\n\n1. test 1\n2. test 2" }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_asana_projects",
+            value: [{ projectGid: "project_1", name: "Scanis" }],
+            updatedAt: new Date("2026-04-23T15:00:00.000Z")
+          }
+        ])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Check my latest completed task in Scanis"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_project_tasks",
+      expect.objectContaining({
+        projectGid: "project_1",
+        completed: true,
+        sortBy: "completedAt",
+        sortDirection: "desc",
+        limit: 1
+      }),
+      expect.objectContaining({
+        latestUserMessage: "Check my latest completed task in Scanis"
+      })
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Latest completed Asana task in Scanis:")
     );
   });
 });
