@@ -1,5 +1,6 @@
 import {
   MessageRole,
+  MessageSenderType,
   PendingActionStatus,
   type Conversation,
   type PrismaClient,
@@ -129,6 +130,8 @@ export class AgentOrchestrator {
       await persistMessage(this.prisma, {
         conversationId: conversation.id,
         role: MessageRole.USER,
+        senderType: MessageSenderType.USER,
+        senderPhone: phone,
         content: preparedInput.text,
         rawPayload: preparedInput.rawPayload
       });
@@ -553,6 +556,7 @@ export class AgentOrchestrator {
     await persistMessage(this.prisma, {
       conversationId,
       role: MessageRole.ASSISTANT,
+      senderType: MessageSenderType.AGENT,
       content: message
     });
     await this.whatsappService.sendTextMessage(to, message);

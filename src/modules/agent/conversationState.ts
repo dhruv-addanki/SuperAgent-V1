@@ -1,4 +1,10 @@
-import { Channel, MessageRole, type Conversation, type PrismaClient } from "@prisma/client";
+import {
+  Channel,
+  MessageRole,
+  MessageSenderType,
+  type Conversation,
+  type PrismaClient
+} from "@prisma/client";
 
 export async function getOrCreateWhatsAppConversation(
   prisma: PrismaClient,
@@ -27,6 +33,8 @@ export async function persistMessage(
   input: {
     conversationId: string;
     role: MessageRole;
+    senderType?: MessageSenderType;
+    senderPhone?: string | null;
     content: string;
     rawPayload?: unknown;
   }
@@ -35,8 +43,23 @@ export async function persistMessage(
     data: {
       conversationId: input.conversationId,
       role: input.role,
+      senderType: input.senderType ?? senderTypeForRole(input.role),
+      senderPhone: input.senderPhone ?? null,
       content: input.content,
       rawPayload: input.rawPayload === undefined ? undefined : (input.rawPayload as any)
     }
   });
+}
+
+function senderTypeForRole(role: MessageRole): MessageSenderType {
+  switch (role) {
+    case MessageRole.USER:
+      return MessageSenderType.USER;
+    case MessageRole.ASSISTANT:
+      return MessageSenderType.AGENT;
+    case MessageRole.TOOL:
+      return MessageSenderType.TOOL;
+    case MessageRole.SYSTEM:
+      return MessageSenderType.SYSTEM;
+  }
 }
