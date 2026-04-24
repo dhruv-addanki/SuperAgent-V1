@@ -314,6 +314,7 @@ describe("agent orchestrator", () => {
       expect.objectContaining({
         data: expect.objectContaining({
           role: "USER",
+          senderPhone: "+15555550100",
           content: "show my asana tasks due today",
           rawPayload: expect.objectContaining({
             kind: "audio",

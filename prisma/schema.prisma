@@ -19,13 +19,6 @@ enum MessageRole {
   SYSTEM    @map("system")
 }
 
-enum MessageSenderType {
-  USER   @map("user")
-  AGENT  @map("agent")
-  TOOL   @map("tool")
-  SYSTEM @map("system")
-}
-
 enum PendingActionStatus {
   PENDING   @map("pending")
   APPROVED  @map("approved")
@@ -98,7 +91,6 @@ model Message {
   id             String      @id @default(cuid())
   conversationId String
   role           MessageRole
-  senderType     MessageSenderType @default(USER)
   senderPhone    String?
   content        String
   rawPayload     Json?
