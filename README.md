@@ -163,6 +163,7 @@ Security and runtime:
 - `PENDING_ACTION_TTL_MINUTES`: Pending action expiration, default `30`.
 - `MAX_TOOL_ROUNDS`: Maximum OpenAI tool-call rounds, default `3`.
 - `RATE_LIMIT_PER_MINUTE`: Redis-backed phone-number rate limit.
+- `USE_REDIS_QUEUE`: Set `true` to enqueue inbound WhatsApp messages with BullMQ. Defaults to `false`; when disabled, messages are processed inline after the webhook returns.
 
 ## Google OAuth Setup
 

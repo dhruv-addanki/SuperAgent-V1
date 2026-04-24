@@ -50,7 +50,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const queue =
     options.queue === null
       ? undefined
-      : (options.queue ?? (env.NODE_ENV === "test" ? undefined : createWhatsAppInboundQueue()));
+      : (options.queue ??
+        (env.NODE_ENV === "test" || !env.USE_REDIS_QUEUE
+          ? undefined
+          : createWhatsAppInboundQueue()));
 
   let worker: Worker<InboundWhatsAppJobData> | undefined;
   if (queue && options.startWorkers !== false && env.NODE_ENV !== "test") {

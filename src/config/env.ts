@@ -54,7 +54,8 @@ const envSchema = z
     LOG_LEVEL: z.string().default("info"),
     PENDING_ACTION_TTL_MINUTES: z.coerce.number().int().positive().default(30),
     MAX_TOOL_ROUNDS: z.coerce.number().int().positive().max(10).default(3),
-    RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30)
+    RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
+    USE_REDIS_QUEUE: booleanFromString
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV !== "production") return;
