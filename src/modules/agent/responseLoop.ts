@@ -5,6 +5,7 @@ import type {
   ResponsesClient,
   ResponseToolDefinition
 } from "../../lib/openaiClient";
+import { isReadOnlyTool, isToolName } from "../../schemas/toolSchemas";
 import { formatToolResultForModel } from "./communicationFormatter";
 import type { ToolExecutionResult } from "./toolExecutor";
 
@@ -29,6 +30,11 @@ export interface ResponseLoopResult {
   toolRounds: number;
   stoppedForApproval?: boolean;
   stoppedForMaxRounds?: boolean;
+}
+
+interface ExecutedToolCall {
+  call: FunctionCall;
+  result: ToolExecutionResult;
 }
 
 export async function runResponseLoop(input: ResponseLoopInput): Promise<ResponseLoopResult> {
@@ -64,10 +70,10 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
     }
 
     currentInput = currentInput.concat((response.output ?? []) as ResponseInputItem[]);
-    const toolOutputItems: ResponseInputItem[] = [];
+    const executedCalls = await executeToolBatch(calls, input.executeTool);
 
-    for (const call of calls) {
-      const result = await input.executeTool(call.name, call.arguments);
+    if (executedCalls.length === 1) {
+      const { result } = executedCalls[0]!;
 
       if (result.userMessage && result.stopAfterTool) {
         return {
@@ -83,13 +89,27 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
           stoppedForApproval: result.approvalRequired
         };
       }
-
-      toolOutputItems.push({
-        type: "function_call_output",
-        call_id: call.callId,
-        output: JSON.stringify(formatToolResultForModel(call.name, result))
-      });
+    } else {
+      const shouldReturnBatchSummary = executedCalls.some(
+        ({ result }) => result.stopAfterTool || result.approvalRequired || !result.ok
+      );
+      if (shouldReturnBatchSummary) {
+        return {
+          assistantMessage: formatBatchStatusMessage(executedCalls),
+          toolRounds,
+          stoppedForApproval: executedCalls.some(({ result }) => result.approvalRequired)
+        };
+      }
     }
+
+    const toolOutputItems = executedCalls.map(
+      ({ call, result }) =>
+        ({
+          type: "function_call_output",
+          call_id: call.callId,
+          output: JSON.stringify(formatToolResultForModel(call.name, result))
+        }) satisfies ResponseInputItem
+    );
 
     toolRounds += 1;
     currentInput = currentInput.concat(toolOutputItems);
@@ -135,4 +155,90 @@ function parseArguments(value: unknown): unknown {
   } catch {
     return {};
   }
+}
+
+async function executeToolBatch(
+  calls: FunctionCall[],
+  executeTool: (toolName: string, input: unknown) => Promise<ToolExecutionResult>
+): Promise<ExecutedToolCall[]> {
+  if (calls.every((call) => isToolName(call.name) && isReadOnlyTool(call.name))) {
+    return Promise.all(calls.map((call) => executeOneToolCall(call, executeTool)));
+  }
+
+  const results: ExecutedToolCall[] = [];
+  for (const call of calls) {
+    results.push(await executeOneToolCall(call, executeTool));
+  }
+  return results;
+}
+
+async function executeOneToolCall(
+  call: FunctionCall,
+  executeTool: (toolName: string, input: unknown) => Promise<ToolExecutionResult>
+): Promise<ExecutedToolCall> {
+  try {
+    return {
+      call,
+      result: await executeTool(call.name, call.arguments)
+    };
+  } catch (error) {
+    return {
+      call,
+      result: {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        userMessage: `I couldn't complete the ${toolLabel(call.name)} step.`
+      }
+    };
+  }
+}
+
+function formatBatchStatusMessage(executedCalls: ExecutedToolCall[]): string {
+  const completed: string[] = [];
+  const needsAttention: string[] = [];
+  const failed: string[] = [];
+
+  for (const { call, result } of executedCalls) {
+    const summary = summarizeToolCall(call, result);
+    if (result.approvalRequired) {
+      needsAttention.push(summary);
+    } else if (!result.ok) {
+      failed.push(summary);
+    } else {
+      completed.push(summary);
+    }
+  }
+
+  const sections: string[] = [];
+  if (completed.length) sections.push(formatStatusSection("Completed:", completed));
+  if (needsAttention.length) sections.push(formatStatusSection("Needs confirmation:", needsAttention));
+  if (failed.length) sections.push(formatStatusSection("Couldn't complete:", failed));
+  return sections.join("\n\n") || "Done.";
+}
+
+function summarizeToolCall(call: FunctionCall, result: ToolExecutionResult): string {
+  if (result.userMessage) return `${toolLabel(call.name)}: ${result.userMessage}`;
+
+  const formatted = formatToolResultForModel(call.name, result);
+  const communication = formatted.communication as { summary?: unknown } | undefined;
+  if (typeof communication?.summary === "string" && communication.summary.trim()) {
+    return `${toolLabel(call.name)}: ${communication.summary.trim()}`;
+  }
+
+  if (!result.ok) return `${toolLabel(call.name)}: I couldn't complete that step.`;
+  return `${toolLabel(call.name)}: Done.`;
+}
+
+function formatStatusSection(title: string, items: string[]): string {
+  return [title, ...items.map((item) => `- ${item}`)].join("\n");
+}
+
+function toolLabel(toolName: string): string {
+  if (toolName.startsWith("asana_")) return "Asana";
+  if (toolName.startsWith("calendar_")) return "Calendar";
+  if (toolName.startsWith("gmail_")) return "Gmail";
+  if (toolName.startsWith("drive_")) return "Drive";
+  if (toolName.startsWith("docs_")) return "Docs";
+  if (toolName === "web_search") return "Web";
+  return "Tool";
 }

@@ -72,6 +72,54 @@ describe("conversation context", () => {
     expect(context.pendingActionSummary).toBe("Pending action: email draft available.");
   });
 
+  it("includes bounded context for every referenced app in multi-task messages", () => {
+    const context = buildConversationContext({
+      latestUserMessage: "What's on my calendar today and show my Asana tasks due today",
+      memoryEntries: [
+        {
+          key: "recent_calendar_events",
+          value: [
+            {
+              eventId: "event_1",
+              title: "Physics",
+              calendarId: "school"
+            }
+          ],
+          updatedAt: new Date()
+        },
+        {
+          key: "recent_asana_tasks",
+          value: [
+            {
+              taskGid: "task_1",
+              name: "Submit homework"
+            }
+          ],
+          updatedAt: new Date()
+        },
+        {
+          key: "recent_gmail_threads",
+          value: [
+            {
+              threadId: "thread_1",
+              subject: "Unrelated"
+            }
+          ],
+          updatedAt: new Date()
+        }
+      ],
+      pendingAction: null,
+      pendingActionSummary: "No pending actions."
+    });
+
+    expect(context.activeApp).toBe("multi");
+    expect(context.activeEntities).toContain(
+      "Calendar event: Physics (eventId: event_1, calendarId: school)"
+    );
+    expect(context.activeEntities).toContain("Asana task: Submit homework (taskGid: task_1)");
+    expect(context.activeEntities.join("\n")).not.toContain("Unrelated");
+  });
+
   it("drops stale recent context from the prompt assembly", () => {
     const context = buildConversationContext({
       latestUserMessage: "show my asana tasks",

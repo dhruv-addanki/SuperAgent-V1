@@ -33,6 +33,7 @@ import {
   buildConversationContext,
   formatConversationContextForPrompt
 } from "./conversationContext";
+import { isCompoundIntentRequest } from "./compoundIntent";
 import {
   asanaTaskDueDate,
   formatAsanaTaskOverview,
@@ -136,6 +137,7 @@ export class AgentOrchestrator {
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
+      const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
 
       const confirmationIntent = parseConfirmationIntent(preparedInput.text);
       if (confirmationIntent) {
@@ -166,8 +168,10 @@ export class AgentOrchestrator {
       }
 
       const genericCalendarOverview =
-        matchGenericCalendarOverviewRequest(preparedInput.text) ??
-        matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history);
+        !isCompoundIntent
+          ? matchGenericCalendarOverviewRequest(preparedInput.text) ??
+            matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history)
+          : null;
       if (genericCalendarOverview) {
         const window = calendarOverviewWindow(genericCalendarOverview, user.timezone);
         const result = await this.toolExecutor.executeToolCall(
@@ -276,7 +280,7 @@ export class AgentOrchestrator {
         history,
         memoryEntries
       );
-      if (asanaLatestShortcut) {
+      if (!isCompoundIntent && asanaLatestShortcut) {
         const toolName =
           asanaLatestShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
         const result = await this.toolExecutor.executeToolCall(
@@ -328,7 +332,7 @@ export class AgentOrchestrator {
         memoryEntries,
         user.timezone
       );
-      if (asanaListShortcut) {
+      if (!isCompoundIntent && asanaListShortcut) {
         const toolName =
           asanaListShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
         const result = await this.toolExecutor.executeToolCall(
@@ -377,7 +381,7 @@ export class AgentOrchestrator {
       }
 
       const genericAsanaTaskOverview = matchGenericAsanaMyTasksRequest(preparedInput.text);
-      if (genericAsanaTaskOverview) {
+      if (!isCompoundIntent && genericAsanaTaskOverview) {
         const result = await this.toolExecutor.executeToolCall(
           "asana_list_my_tasks",
           {

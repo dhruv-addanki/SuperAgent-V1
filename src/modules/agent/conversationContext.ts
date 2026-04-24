@@ -1,5 +1,6 @@
 import type { PendingAction } from "@prisma/client";
 import type { PendingToolPayload } from "./approvalPolicy";
+import { detectReferencedApps, type ReferencedApp } from "./compoundIntent";
 
 export interface PromptMemoryEntry {
   key: string;
@@ -23,11 +24,15 @@ export function buildConversationContext(input: {
   pendingAction: PendingAction | null;
   pendingActionSummary: string;
 }): ConversationContext {
+  const messageApps = detectReferencedApps(input.latestUserMessage);
   const activeApp =
-    inferActiveAppFromMessage(input.latestUserMessage) ??
-    inferActiveAppFromPendingAction(input.pendingAction) ??
-    inferActiveAppFromMemory(input.memoryEntries) ??
-    "general";
+    messageApps.length > 1
+      ? "multi"
+      : (messageApps[0] ??
+        inferActiveAppFromPendingAction(input.pendingAction) ??
+        inferActiveAppFromMemory(input.memoryEntries) ??
+        "general");
+  const contextApps = activeApp === "multi" ? messageApps : undefined;
 
   const activeEntities: string[] = [];
   const recentResults: string[] = [];
@@ -58,7 +63,7 @@ export function buildConversationContext(input: {
     }
 
     if (isStaleContextEntry(entry)) continue;
-    if (!memoryBelongsToActiveApp(entry.key, activeApp)) continue;
+    if (!memoryBelongsToActiveApp(entry.key, activeApp, contextApps)) continue;
 
     const { entities, resultSummary, hints } = summarizeEntry(entry);
     for (const entity of entities) {
@@ -110,29 +115,6 @@ export function formatConversationContextForPrompt(context: ConversationContext)
   ].join("\n");
 }
 
-function inferActiveAppFromMessage(text: string): string | null {
-  const normalized = text.toLowerCase();
-  if (/\basana\b|\bmy tasks\b|\bproject\b|\bworkspace\b|\bdue today\b|\bdue tomorrow\b/.test(normalized)) {
-    return "asana";
-  }
-  if (/\bcalendar\b|\bevent\b|\bmeeting\b|\bappointment\b|\breschedule\b|\bcancel it\b/.test(normalized)) {
-    return "calendar";
-  }
-  if (/\bgmail\b|\bemail\b|\bdraft\b|\bthread\b|\binbox\b/.test(normalized)) {
-    return "gmail";
-  }
-  if (/\bgoogle doc\b|\bdoc\b|\bdocument\b|\bappend\b|\bsame doc\b/.test(normalized)) {
-    return "docs";
-  }
-  if (/\bdrive\b|\bfile\b|\bfolder\b|\bdelete that file\b|\bsame file\b/.test(normalized)) {
-    return "drive";
-  }
-  if (/\bsearch\b|\blook up\b|\bonline\b|\bweb\b/.test(normalized)) {
-    return "web";
-  }
-  return null;
-}
-
 function inferActiveAppFromPendingAction(pendingAction: PendingAction | null): string | null {
   if (!pendingAction) return null;
   const payload = pendingAction.payload as Partial<PendingToolPayload> | null;
@@ -157,7 +139,14 @@ function inferActiveAppFromMemory(entries: PromptMemoryEntry[]): string | null {
   return null;
 }
 
-function memoryBelongsToActiveApp(key: string, activeApp: string): boolean {
+function memoryBelongsToActiveApp(
+  key: string,
+  activeApp: string,
+  contextApps?: ReferencedApp[]
+): boolean {
+  if (activeApp === "multi") {
+    return Boolean(contextApps?.some((app) => memoryBelongsToActiveApp(key, app)));
+  }
   if (activeApp === "asana") return key.startsWith("recent_asana_");
   if (activeApp === "calendar") return key.startsWith("recent_calendar_");
   if (activeApp === "gmail") return key === "recent_gmail_threads";

@@ -170,4 +170,251 @@ describe("response loop", () => {
       }
     });
   });
+
+  it("executes multiple independent read tools in one round and feeds every output back", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi
+        .fn()
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_web",
+              name: "web_search",
+              arguments: JSON.stringify({
+                query: "NVDA stock news today"
+              })
+            },
+            {
+              type: "function_call",
+              call_id: "call_tasks",
+              name: "asana_list_my_tasks",
+              arguments: JSON.stringify({
+                dueOn: "2026-04-24"
+              })
+            }
+          ]
+        })
+        .mockResolvedValueOnce({
+          output_text: "NVDA moved on chip demand, and you have 1 Asana task due today."
+        })
+    };
+
+    const executeTool = vi.fn(async (toolName: string) =>
+      toolName === "web_search"
+        ? {
+            ok: true,
+            data: {
+              query: "NVDA stock news today",
+              summary: "NVDA rose on AI chip demand.",
+              sources: []
+            }
+          }
+        : {
+            ok: true,
+            data: [{ gid: "task_1", name: "Ship launch notes", completed: false }]
+          }
+    );
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "why is NVDA up and show my tasks due today" }],
+      executeTool,
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).toBe(
+      "NVDA moved on chip demand, and you have 1 Asana task due today."
+    );
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    const secondCall = (client.createResponse as any).mock.calls[1][0];
+    const functionOutputs = secondCall.input.filter(
+      (item: any) => item.type === "function_call_output"
+    );
+    expect(functionOutputs.map((item: any) => item.call_id)).toEqual(["call_web", "call_tasks"]);
+  });
+
+  it("executes mixed read and write batches without dropping later calls", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi
+        .fn()
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_calendar",
+              name: "calendar_create_event",
+              arguments: JSON.stringify({
+                title: "Trade decision",
+                start: "2026-04-24T19:00:00.000Z",
+                end: "2026-04-24T19:30:00.000Z"
+              })
+            },
+            {
+              type: "function_call",
+              call_id: "call_web",
+              name: "web_search",
+              arguments: JSON.stringify({
+                query: "NVDA stock news today"
+              })
+            }
+          ]
+        })
+        .mockResolvedValueOnce({
+          output_text: "Booked the reminder and found the NVDA summary."
+        })
+    };
+
+    const executeTool = vi.fn(async (toolName: string) =>
+      toolName === "calendar_create_event"
+        ? {
+            ok: true,
+            data: {
+              title: "Trade decision",
+              start: "2026-04-24T19:00:00.000Z"
+            },
+            userMessage: "Booked: Trade decision at Apr 24, 2026, 3:00 PM."
+          }
+        : {
+            ok: true,
+            data: {
+              query: "NVDA stock news today",
+              summary: "NVDA rose on AI chip demand.",
+              sources: []
+            }
+          }
+    );
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "why is NVDA up and add a calendar reminder" }],
+      executeTool,
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).toBe("Booked the reminder and found the NVDA summary.");
+    expect(executeTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns partial progress when one task succeeds and another fails", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi.fn(async () => ({
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_web",
+            name: "web_search",
+            arguments: JSON.stringify({
+              query: "NVDA stock news today"
+            })
+          },
+          {
+            type: "function_call",
+            call_id: "call_calendar",
+            name: "calendar_list_events",
+            arguments: JSON.stringify({
+              timeMin: "2026-04-24T04:00:00.000Z",
+              timeMax: "2026-04-25T04:00:00.000Z"
+            })
+          }
+        ]
+      }))
+    };
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "why is NVDA up and what is on my calendar" }],
+      executeTool: vi.fn(async (toolName: string) =>
+        toolName === "web_search"
+          ? {
+              ok: true,
+              data: {
+                query: "NVDA stock news today",
+                summary: "NVDA rose on AI chip demand.",
+                sources: []
+              }
+            }
+          : {
+              ok: false,
+              error: "GOOGLE_AUTH_REQUIRED",
+              userMessage: "Reconnect Google Calendar and try again."
+            }
+      ),
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).toContain("Completed:");
+    expect(result.assistantMessage).toContain("Web: NVDA rose on AI chip demand.");
+    expect(result.assistantMessage).toContain("Couldn't complete:");
+    expect(result.assistantMessage).toContain("Calendar: Reconnect Google Calendar and try again.");
+    expect((client.createResponse as any).mock.calls).toHaveLength(1);
+  });
+
+  it("does not let a Gmail draft stop other clear tasks in the same batch", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi.fn(async () => ({
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_draft",
+            name: "gmail_create_draft",
+            arguments: JSON.stringify({
+              to: "brad@example.com",
+              subject: "Meeting",
+              body: "Thursday works."
+            })
+          },
+          {
+            type: "function_call",
+            call_id: "call_web",
+            name: "web_search",
+            arguments: JSON.stringify({
+              query: "NVDA stock news today"
+            })
+          }
+        ]
+      }))
+    };
+
+    const executeTool = vi.fn(async (toolName: string) =>
+      toolName === "gmail_create_draft"
+        ? {
+            ok: true,
+            stopAfterTool: true,
+            userMessage: "Draft ready.\n\nTo: brad@example.com\nSubject: Meeting"
+          }
+        : {
+            ok: true,
+            data: {
+              query: "NVDA stock news today",
+              summary: "NVDA rose on AI chip demand.",
+              sources: []
+            }
+          }
+    );
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "draft Brad an email and why is NVDA up" }],
+      executeTool,
+      maxToolRounds: 3
+    });
+
+    expect(executeTool).toHaveBeenCalledTimes(2);
+    expect(result.assistantMessage).toContain("Gmail: Draft ready.");
+    expect(result.assistantMessage).toContain("Web: NVDA rose on AI chip demand.");
+    expect((client.createResponse as any).mock.calls).toHaveLength(1);
+  });
 });
