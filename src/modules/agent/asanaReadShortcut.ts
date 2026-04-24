@@ -65,6 +65,12 @@ const MONTH_INDEX: Record<string, number> = {
   december: 11,
   dec: 11
 };
+const MONTH_NAME_PATTERN =
+  "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec";
+const MONTH_DAY_REFERENCE_PATTERN = `(?:${MONTH_NAME_PATTERN})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,\\s*\\d{4})?`;
+const DATE_ONLY_FOLLOW_UP_PATTERN = new RegExp(
+  `^(?:(?:what|how)\\s+about\\s+|and\\s+|for\\s+|from\\s+|on\\s+|due\\s+)?(?:before\\s+yesterday|today|tomorrow|yesterday|${MONTH_DAY_REFERENCE_PATTERN}|before\\s+${MONTH_DAY_REFERENCE_PATTERN})$`
+);
 
 export function matchGenericAsanaMyTasksRequest(
   text: string
@@ -152,7 +158,8 @@ export function matchAsanaListShortcut(
   const dateOnlyFollowUp =
     hasRecentAsanaContext(history, memoryEntries) &&
     !/\btask\b|\bmy tasks\b/.test(normalized) &&
-    Boolean(dateFilter);
+    Boolean(dateFilter) &&
+    isDateOnlyAsanaFollowUp(normalized);
   const wantsTaskList =
     /\btask\b/.test(normalized) ||
     /\bmy tasks\b/.test(normalized) ||
@@ -357,10 +364,33 @@ function hasRecentAsanaContext(
     const item = history[index];
     if (item?.role !== "assistant") continue;
     const content = typeof item.content === "string" ? item.content.toLowerCase() : "";
-    if (content.includes("asana")) return true;
+    if (isAsanaAssistantContext(content)) return true;
   }
 
   return false;
+}
+
+function isAsanaAssistantContext(normalizedContent: string): boolean {
+  return (
+    /\bopen asana tasks?\b/.test(normalizedContent) ||
+    /\basana tasks? (?:due|in|matched|i can see)\b/.test(normalizedContent) ||
+    /\b(?:latest|last)(?:\s+(?:open|completed))?\s+asana task\b/.test(normalizedContent) ||
+    /\b(?:open|completed)\s+asana task\b/.test(normalizedContent) ||
+    /\byour asana projects?\b/.test(normalizedContent) ||
+    /\bfound \d+ asana (?:task|tasks|project|projects|workspace|workspaces|team|teams)\b/.test(
+      normalizedContent
+    ) ||
+    /\basana workspace\b/.test(normalizedContent) ||
+    /\b(?:created|updated|deleted) asana task\b/.test(normalizedContent)
+  );
+}
+
+function isDateOnlyAsanaFollowUp(normalizedText: string): boolean {
+  const compact = normalizedText
+    .replace(/[?.!]+$/g, "")
+    .replace(/^(?:ok|okay|yeah|yes|yep|sure)[,\s]+/, "")
+    .trim();
+  return DATE_ONLY_FOLLOW_UP_PATTERN.test(compact);
 }
 
 function resolveScope(

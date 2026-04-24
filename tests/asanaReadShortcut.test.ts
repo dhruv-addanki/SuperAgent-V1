@@ -96,6 +96,26 @@ describe("asana read shortcut", () => {
     });
   });
 
+  it("does not treat calendar event text containing via Asana as Asana task context", () => {
+    const history = [
+      {
+        role: "assistant",
+        content:
+          "Across all calendars today:\n• All day — Systems Class Ex4 Due (Dhruv's tasks - My workspace (via Asana))"
+      }
+    ];
+
+    expect(
+      matchAsanaListShortcut(
+        "Why is nvda stock up today",
+        history as any,
+        [],
+        "America/New_York",
+        new Date("2026-04-24T17:52:00.000Z")
+      )
+    ).toBeNull();
+  });
+
   it("matches latest-task shortcuts with recent project context", () => {
     const match = matchAsanaLatestTaskShortcut(
       "Check my latest completed task in Scanis",

@@ -37,6 +37,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "If the user references a named calendar such as meetings, work, or general, first use calendar_list_calendars to resolve the calendar ID.",
     "If the user explicitly asks you to look something up online, verify a fact from the public web, or find current factual information not available in Google tools, use web_search.",
     "For things like course titles, company facts, or current public info, use web_search instead of saying you can't look it up.",
+    "For market or stock-move questions like 'why is NVDA up today', use web_search even if recent conversation context mentions calendars or tasks.",
+    "If the user combines a public web lookup with a calendar action, do both: use web_search for the current facts and calendar_create_event for the scheduled reminder.",
     "If Drive search finds a Google Doc and the user asks for details, contents, summary, or questions about that doc, call docs_read_document with the file ID.",
     "If the user asks to delete or remove a Drive file or Google Doc, use drive_delete_file to move it to trash.",
     "If recent_gmail_threads is present in memory and the user says delete/trash/archive all of them, those emails, or the listed emails, use gmail_trash_thread on the referenced recent threads.",

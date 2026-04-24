@@ -8,6 +8,8 @@ export function matchGenericCalendarOverviewRequest(
   text: string
 ): GenericCalendarOverviewTarget | null {
   const normalized = text.trim().toLowerCase();
+  if (isCalendarWriteRequest(normalized)) return null;
+
   const referencesGenericCalendar =
     /\bmy calendar\b/.test(normalized) ||
     /\bmy cal\b/.test(normalized) ||
@@ -16,8 +18,8 @@ export function matchGenericCalendarOverviewRequest(
   const asksForOverview =
     /\bwhat(?:'s|s)? on\b/.test(normalized) ||
     /\bwhat do i have\b/.test(normalized) ||
-    /\bcheck\b/.test(normalized) ||
-    /\bshow\b/.test(normalized) ||
+    /\bcheck\s+(?:all\s+)?(?:my\s+)?(?:cal|calendars?)\b/.test(normalized) ||
+    /\bshow\s+(?:all\s+)?(?:my\s+)?(?:cal|calendars?)\b/.test(normalized) ||
     /\bagenda\b/.test(normalized);
 
   if (!referencesGenericCalendar || !asksForOverview) return null;
@@ -108,6 +110,19 @@ function formatTimeRange(event: CalendarEventSummary, timezone: string): string 
 
 function isAllDay(value: string): boolean {
   return !value.includes("T");
+}
+
+function isCalendarWriteRequest(normalizedText: string): boolean {
+  const calendarNoun = /(?:cal|calendars?)/;
+  const writeVerb = /(?:add|put|create|schedule|book|set|place|make)/;
+  return (
+    new RegExp(`\\b${writeVerb.source}\\b[^.?!]*\\b(?:my\\s+)?${calendarNoun.source}\\b`).test(
+      normalizedText
+    ) ||
+    new RegExp(`\\b(?:my\\s+)?${calendarNoun.source}\\b[^.?!]*\\b${writeVerb.source}\\b`).test(
+      normalizedText
+    )
+  );
 }
 
 function lastAssistantMessage(history: ResponseInputItem[]): string | null {

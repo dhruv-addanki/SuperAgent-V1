@@ -487,6 +487,128 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("routes mixed stock and calendar-create requests through the response loop", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "NVDA summary and calendar event booked",
+      toolRounds: 1
+    });
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Why is NVDA stock up today and put it in my calendar to check it and make a trade decision at 3 today"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "NVDA summary and calendar event booked"
+    );
+  });
+
+  it("routes stock follow-ups through the response loop after calendar text mentions Asana", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "NVDA market summary",
+      toolRounds: 1
+    });
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          {
+            role: "ASSISTANT",
+            content:
+              "Across all calendars today:\n• All day — Systems Class Ex4 Due (Dhruv's tasks - My workspace (via Asana))"
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Why is nvda stock up today"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "NVDA market summary"
+    );
+  });
+
   it("asks for clarification before ambiguous Asana bulk-complete commands", async () => {
     const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
 

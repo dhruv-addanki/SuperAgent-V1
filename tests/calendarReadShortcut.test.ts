@@ -19,6 +19,15 @@ describe("calendar read shortcut", () => {
     );
   });
 
+  it("does not steal calendar write requests", () => {
+    expect(
+      matchGenericCalendarOverviewRequest(
+        "Why is NVDA stock up today and put it in my calendar to check it and make a trade decision at 3 today"
+      )
+    ).toBeNull();
+    expect(matchGenericCalendarOverviewRequest("Add dentist to my calendar at 3 today")).toBeNull();
+  });
+
   it("builds a timezone-correct day window and formats an all-calendar overview", () => {
     const window = calendarOverviewWindow(
       "today",
