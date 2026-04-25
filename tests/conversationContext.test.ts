@@ -179,4 +179,46 @@ describe("conversation context", () => {
     expect(context.recentResults).toEqual(["Current Notion page: Launch Notes."]);
     expect(context.communicationHints[0]).toContain("same Notion page");
   });
+
+  it("includes profile, response preferences, and integration status in prompt context", () => {
+    const context = buildConversationContext({
+      latestUserMessage: "summarize this",
+      userProfile: [
+        "Timezone: America/New_York",
+        "Connected integrations: Google (dhruv@gmail.com)",
+        "Missing integrations: Asana, Notion"
+      ],
+      memoryEntries: [
+        {
+          key: "profile_preferred_name",
+          value: {
+            name: "Dhruv",
+            source: "explicit"
+          },
+          updatedAt: new Date()
+        },
+        {
+          key: "assistant_response_preferences",
+          value: {
+            verbosity: "concise",
+            tone: "direct",
+            format: "bullets",
+            minimalFollowUps: true
+          },
+          updatedAt: new Date()
+        }
+      ],
+      pendingAction: null,
+      pendingActionSummary: "No pending actions."
+    });
+
+    const formatted = formatConversationContextForPrompt(context);
+
+    expect(formatted).toContain("User profile:");
+    expect(formatted).toContain("Preferred name: Dhruv");
+    expect(formatted).toContain("Connected integrations: Google (dhruv@gmail.com)");
+    expect(formatted).toContain(
+      "Response preferences: concise, direct, bullets, minimal follow-ups"
+    );
+  });
 });

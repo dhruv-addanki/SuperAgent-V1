@@ -75,6 +75,229 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("returns setup status for explicit setup requests without calling the model", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: null,
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "setup"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Setup status:")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("/auth/google/start?phone=%2B15555550100")
+    );
+  });
+
+  it("returns setup status for first-time greetings with no integrations", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: null,
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [{ role: "USER", content: "hi" }])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "hi"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Google powers Calendar, Gmail, Drive, and Docs.")
+    );
+  });
+
+  it("still runs substantive first-time requests and appends a setup hint", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "I can help with that.",
+      toolRounds: 0
+    });
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: null,
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [{ role: "USER", content: "what can you do" }])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "what can you do"
+    });
+
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "I can help with that.\n\nFor full setup, reply setup to connect Google, Asana, Notion."
+    );
+  });
+
+  it("returns a short Google connect link when a calendar shortcut needs auth", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: null,
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      },
+      auditLog: { create: vi.fn(async () => undefined) }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Check my calendar"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringMatching(
+        /^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/
+      )
+    );
+  });
+
   it("builds structured conversation context for follow-up prompt assembly", async () => {
     runResponseLoopMock.mockResolvedValue({
       assistantMessage: "Updated the doc",

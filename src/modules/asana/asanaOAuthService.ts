@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import { ASANA_SCOPES } from "../../config/constants";
 import { env } from "../../config/env";
 import { encryptString } from "../../lib/crypto";
+import { LongTermMemory } from "../memory/longTermMemory";
 import {
   buildAsanaAuthUrl,
   calculateExpiryDate,
@@ -86,6 +87,12 @@ export class AsanaOAuthService {
         scope: tokens.scope ?? ASANA_SCOPES.join(" ")
       }
     });
+
+    await new LongTermMemory(this.prisma).rememberNameCandidate(
+      user.id,
+      tokens.data?.name,
+      "asana"
+    );
 
     return {
       email: tokens.data?.email ?? undefined,

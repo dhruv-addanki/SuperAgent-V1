@@ -34,6 +34,15 @@ import {
   buildConversationContext,
   formatConversationContextForPrompt
 } from "./conversationContext";
+import {
+  formatSetupHintForWhatsApp,
+  formatSetupStatusForWhatsApp,
+  isGreetingOnly,
+  isSetupStatusRequest,
+  setupStatusProfileLines,
+  SetupStatusService,
+  type SetupStatus
+} from "./setupStatusService";
 import { isCompoundIntentRequest } from "./compoundIntent";
 import {
   asanaTaskDueDate,
@@ -79,6 +88,7 @@ export class AgentOrchestrator {
   private readonly toolExecutor: ToolExecutor;
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
+  private readonly setupStatusService: SetupStatusService;
   private readonly whatsappMediaService: Pick<WhatsAppMediaService, "downloadAudio">;
   private readonly audioTranscriptionService: Pick<AudioTranscriptionService, "transcribe">;
 
@@ -99,6 +109,7 @@ export class AgentOrchestrator {
     );
     this.shortTermMemory = new ShortTermMemory(prisma);
     this.longTermMemory = new LongTermMemory(prisma);
+    this.setupStatusService = new SetupStatusService(prisma);
     this.whatsappMediaService = options.whatsappMediaService ?? new WhatsAppMediaService();
     this.audioTranscriptionService =
       options.audioTranscriptionService ?? new AudioTranscriptionService();
@@ -116,7 +127,7 @@ export class AgentOrchestrator {
 
   async processInboundWhatsAppMessage(input: WhatsAppInboundMessagePayload): Promise<void> {
     const phone = normalizePhone(input.from);
-    const user = await this.prisma.user.upsert({
+    let user = await this.prisma.user.upsert({
       where: { whatsappPhone: phone },
       update: {},
       create: { whatsappPhone: phone }
@@ -141,10 +152,44 @@ export class AgentOrchestrator {
         rawPayload: preparedInput.rawPayload
       });
 
-      await this.longTermMemory.maybeExtractMemoryFromConversation(user.id, preparedInput.text);
+      const memoryExtraction = await this.longTermMemory.maybeExtractMemoryFromConversation(
+        user,
+        preparedInput.text
+      );
+      if (memoryExtraction.timezone) {
+        user = { ...user, timezone: memoryExtraction.timezone };
+      }
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
+      const setupStatus = await this.setupStatusService.getStatus(user);
+      const setupRequest = isSetupStatusRequest(preparedInput.text);
+      const firstInteraction = isFirstInteraction(history);
+      const appendSetupHint =
+        firstInteraction &&
+        !setupRequest &&
+        !isGreetingOnly(preparedInput.text) &&
+        !setupStatus.hasAnyConnected;
+      const replyToUser = async (
+        message: string,
+        options: { allowSetupHint?: boolean } = {}
+      ): Promise<void> => {
+        const allowSetupHint = options.allowSetupHint ?? true;
+        await this.reply(
+          conversation.id,
+          preparedInput.from,
+          allowSetupHint && appendSetupHint ? appendSetupHintToMessage(message, setupStatus) : message
+        );
+      };
+
+      if (
+        setupRequest ||
+        (firstInteraction && isGreetingOnly(preparedInput.text) && !setupStatus.hasAnyConnected)
+      ) {
+        await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
+        return;
+      }
+
       const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
 
       const confirmationIntent = parseConfirmationIntent(preparedInput.text);
@@ -167,9 +212,7 @@ export class AgentOrchestrator {
         const scopeLabel = ambiguousBulkComplete.projectName
           ? `${ambiguousBulkComplete.taskCount} listed tasks in ${ambiguousBulkComplete.projectName}`
           : `${ambiguousBulkComplete.taskCount} listed tasks`;
-        await this.reply(
-          conversation.id,
-          preparedInput.from,
+        await replyToUser(
           `Do you mean ${scopeLabel}, or every incomplete Asana task I can see?`
         );
         return;
@@ -197,18 +240,18 @@ export class AgentOrchestrator {
         );
 
         if (!result.ok) {
-          await this.reply(
-            conversation.id,
-            preparedInput.from,
+          await replyToUser(
             result.userMessage ?? "I couldn't load your calendar right now. Try again in a moment."
           );
           return;
         }
 
-        await this.reply(
-          conversation.id,
-          preparedInput.from,
-          formatCalendarOverview((result.data as CalendarEventSummary[] | undefined) ?? [], user.timezone, window.label)
+        await replyToUser(
+          formatCalendarOverview(
+            (result.data as CalendarEventSummary[] | undefined) ?? [],
+            user.timezone,
+            window.label
+          )
         );
         return;
       }
@@ -253,26 +296,20 @@ export class AgentOrchestrator {
         ]);
 
         if (!todayResult.ok) {
-          await this.reply(
-            conversation.id,
-            preparedInput.from,
+          await replyToUser(
             todayResult.userMessage ?? "I couldn't load your Asana tasks right now. Try again in a moment."
           );
           return;
         }
 
         if (!latestOpenResult.ok) {
-          await this.reply(
-            conversation.id,
-            preparedInput.from,
+          await replyToUser(
             latestOpenResult.userMessage ?? "I couldn't load your latest Asana task right now. Try again in a moment."
           );
           return;
         }
 
-        await this.reply(
-          conversation.id,
-          preparedInput.from,
+        await replyToUser(
           formatAsanaTodayAndLatestOpenReply(
             (todayResult.data as AsanaTaskSummary[] | undefined) ?? [],
             ((latestOpenResult.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null,
@@ -310,17 +347,13 @@ export class AgentOrchestrator {
         );
 
         if (!result.ok) {
-          await this.reply(
-            conversation.id,
-            preparedInput.from,
+          await replyToUser(
             result.userMessage ?? "I couldn't load that Asana task right now. Try again in a moment."
           );
           return;
         }
 
-        await this.reply(
-          conversation.id,
-          preparedInput.from,
+        await replyToUser(
           formatLatestAsanaTaskReply(
             ((result.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null,
             {
@@ -364,17 +397,13 @@ export class AgentOrchestrator {
         );
 
         if (!result.ok) {
-          await this.reply(
-            conversation.id,
-            preparedInput.from,
+          await replyToUser(
             result.userMessage ?? "I couldn't load those Asana tasks right now. Try again in a moment."
           );
           return;
         }
 
-        await this.reply(
-          conversation.id,
-          preparedInput.from,
+        await replyToUser(
           formatScopedAsanaTaskList(
             (result.data as AsanaTaskSummary[] | undefined) ?? [],
             {
@@ -405,17 +434,13 @@ export class AgentOrchestrator {
         );
 
         if (!result.ok) {
-          await this.reply(
-            conversation.id,
-            preparedInput.from,
+          await replyToUser(
             result.userMessage ?? "I couldn't load your Asana tasks right now. Try again in a moment."
           );
           return;
         }
 
-        await this.reply(
-          conversation.id,
-          preparedInput.from,
+        await replyToUser(
           formatAsanaTaskOverview(
             (result.data as AsanaTaskSummary[] | undefined) ?? [],
             genericAsanaTaskOverview
@@ -433,7 +458,8 @@ export class AgentOrchestrator {
         latestUserMessage: preparedInput.text,
         memoryEntries,
         pendingAction,
-        pendingActionSummary: buildPendingActionContext(pendingAction)
+        pendingActionSummary: buildPendingActionContext(pendingAction),
+        userProfile: setupStatusProfileLines(setupStatus, user.timezone)
       });
       const prompt = buildSystemPrompt({
         timezone: user.timezone,
@@ -457,7 +483,7 @@ export class AgentOrchestrator {
         maxToolRounds: env.MAX_TOOL_ROUNDS
       });
 
-      await this.reply(conversation.id, preparedInput.from, result.assistantMessage);
+      await replyToUser(result.assistantMessage);
     } catch (error) {
       logger.error({ error }, "Failed to process inbound WhatsApp message");
       await this.reply(conversation.id, input.from, userMessageForError(error));
@@ -569,4 +595,14 @@ export class AgentOrchestrator {
 
 function normalizePhone(phone: string): string {
   return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {
+  const userMessageCount = history.filter((item) => item.role === "user").length;
+  return userMessageCount > 0 && userMessageCount <= 1;
+}
+
+function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): string {
+  const hint = formatSetupHintForWhatsApp(setupStatus);
+  return message.includes(hint) ? message : `${message}\n\n${hint}`;
 }

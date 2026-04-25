@@ -24,7 +24,10 @@ describe("Notion token service", () => {
     await expect(
       service.getAccessTokenForUser({ id: "user_1", whatsappPhone: "+15555550100" } as any)
     ).rejects.toMatchObject({
-      code: "NOTION_AUTH_REQUIRED"
+      code: "NOTION_AUTH_REQUIRED",
+      userMessage: expect.stringMatching(
+        /^Connect Notion first: .*\/auth\/notion\/start\?phone=%2B15555550100$/
+      )
     });
   });
 

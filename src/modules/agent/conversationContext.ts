@@ -10,6 +10,7 @@ export interface PromptMemoryEntry {
 }
 
 export interface ConversationContext {
+  userProfile: string[];
   activeApp: string;
   activeEntities: string[];
   recentResults: string[];
@@ -23,6 +24,7 @@ export function buildConversationContext(input: {
   memoryEntries: PromptMemoryEntry[];
   pendingAction: PendingAction | null;
   pendingActionSummary: string;
+  userProfile?: string[];
 }): ConversationContext {
   const messageApps = detectReferencedApps(input.latestUserMessage);
   const activeApp =
@@ -37,9 +39,21 @@ export function buildConversationContext(input: {
   const activeEntities: string[] = [];
   const recentResults: string[] = [];
   const communicationHints = new Set<string>();
+  const userProfile = [...(input.userProfile ?? [])];
   const userPreferences: string[] = [];
 
   for (const entry of input.memoryEntries) {
+    if (entry.key === "profile_preferred_name") {
+      const name =
+        entry.value &&
+        typeof entry.value === "object" &&
+        typeof (entry.value as { name?: unknown }).name === "string"
+          ? (entry.value as { name: string }).name
+          : null;
+      if (name) userProfile.push(`Preferred name: ${name}`);
+      continue;
+    }
+
     if (entry.key === "preferred_timezone") {
       const timezone =
         entry.value &&
@@ -47,7 +61,15 @@ export function buildConversationContext(input: {
         typeof (entry.value as { timezone?: unknown }).timezone === "string"
           ? (entry.value as { timezone: string }).timezone
           : null;
-      if (timezone) userPreferences.push(`Preferred timezone: ${timezone}`);
+      if (timezone && !userProfile.some((line) => line.startsWith("Timezone: "))) {
+        userProfile.push(`Timezone: ${timezone}`);
+      }
+      continue;
+    }
+
+    if (entry.key === "assistant_response_preferences") {
+      const preferences = assistantPreferenceSummary(entry.value);
+      if (preferences) userPreferences.push(`Response preferences: ${preferences}`);
       continue;
     }
 
@@ -86,6 +108,7 @@ export function buildConversationContext(input: {
   }
 
   return {
+    userProfile: userProfile.slice(0, 6),
     activeApp,
     activeEntities,
     recentResults,
@@ -97,6 +120,8 @@ export function buildConversationContext(input: {
 
 export function formatConversationContextForPrompt(context: ConversationContext): string {
   return [
+    "User profile:",
+    context.userProfile.length ? context.userProfile.map((line) => `- ${line}`).join("\n") : "- None",
     `Active app/workflow: ${context.activeApp}`,
     "Active entities:",
     context.activeEntities.length ? context.activeEntities.map((line) => `- ${line}`).join("\n") : "- None",
@@ -113,6 +138,23 @@ export function formatConversationContextForPrompt(context: ConversationContext)
       ? context.userPreferences.map((line) => `- ${line}`).join("\n")
       : "- None"
   ].join("\n");
+}
+
+function assistantPreferenceSummary(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const preferences = value as {
+    verbosity?: unknown;
+    tone?: unknown;
+    format?: unknown;
+    minimalFollowUps?: unknown;
+  };
+  const parts = [
+    typeof preferences.verbosity === "string" ? preferences.verbosity : undefined,
+    typeof preferences.tone === "string" ? preferences.tone : undefined,
+    typeof preferences.format === "string" ? preferences.format : undefined,
+    preferences.minimalFollowUps === true ? "minimal follow-ups" : undefined
+  ].filter((part): part is string => Boolean(part));
+  return parts.length ? parts.join(", ") : null;
 }
 
 function inferActiveAppFromPendingAction(pendingAction: PendingAction | null): string | null {

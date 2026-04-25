@@ -14,7 +14,7 @@ export class AuthRequiredError extends UserFacingError {
     super(
       `${provider} account is not connected`,
       `${codePrefix}_AUTH_REQUIRED`,
-      `Your ${provider} account needs to be connected first: ${authUrl}`
+      `Connect ${provider} first: ${authUrl}`
     );
   }
 }

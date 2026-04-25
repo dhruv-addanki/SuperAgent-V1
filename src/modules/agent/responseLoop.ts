@@ -239,6 +239,7 @@ function toolLabel(toolName: string): string {
   if (toolName.startsWith("gmail_")) return "Gmail";
   if (toolName.startsWith("drive_")) return "Drive";
   if (toolName.startsWith("docs_")) return "Docs";
+  if (toolName.startsWith("notion_")) return "Notion";
   if (toolName === "web_search") return "Web";
   return "Tool";
 }

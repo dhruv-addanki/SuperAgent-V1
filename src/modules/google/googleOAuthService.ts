@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env";
 import { GOOGLE_SCOPES } from "../../config/constants";
 import { encryptString } from "../../lib/crypto";
+import { LongTermMemory } from "../memory/longTermMemory";
 
 const { google } = require("googleapis") as any;
 
@@ -83,6 +84,12 @@ export class GoogleOAuthService {
         scope: tokens.scope ?? GOOGLE_SCOPES.join(" ")
       }
     });
+
+    await new LongTermMemory(this.prisma).rememberNameCandidate(
+      user.id,
+      typeof profile.name === "string" ? profile.name : undefined,
+      "google"
+    );
 
     return { email: profile.email ?? undefined, phone: state.phone };
   }

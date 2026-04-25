@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasRequiredScopes } from "../src/modules/google/tokenService";
+import { GoogleTokenService, hasRequiredScopes } from "../src/modules/google/tokenService";
 
 describe("token service scope matching", () => {
   it("treats broad Google scopes as satisfying narrower feature checks", () => {
@@ -27,5 +27,22 @@ describe("token service scope matching", () => {
       true
     );
     expect(hasRequiredScopes(granted, ["https://www.googleapis.com/auth/gmail.send"])).toBe(true);
+  });
+
+  it("uses a short connect message when Google is missing", async () => {
+    const service = new GoogleTokenService({
+      googleAccount: {
+        findUnique: async () => null
+      }
+    } as any);
+
+    await expect(
+      service.getOAuthClientForUser({ id: "user_1", whatsappPhone: "+15555550100" })
+    ).rejects.toMatchObject({
+      code: "GOOGLE_AUTH_REQUIRED",
+      userMessage: expect.stringMatching(
+        /^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/
+      )
+    });
   });
 });

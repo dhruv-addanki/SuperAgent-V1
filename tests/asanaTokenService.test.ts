@@ -24,7 +24,10 @@ describe("asana token service", () => {
     await expect(
       service.getAccessTokenForUser({ id: "user_1", whatsappPhone: "+15555550100" } as any)
     ).rejects.toMatchObject({
-      code: "ASANA_AUTH_REQUIRED"
+      code: "ASANA_AUTH_REQUIRED",
+      userMessage: expect.stringMatching(
+        /^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/
+      )
     });
   });
 
