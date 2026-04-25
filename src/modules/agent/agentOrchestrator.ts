@@ -201,7 +201,7 @@ export class AgentOrchestrator {
         await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
         return;
       }
-      if (!isCompoundIntent && missingRequiredIntegrations.length === 1) {
+      if (missingRequiredIntegrations.length === 1) {
         await replyToUser(formatMissingIntegrationForWhatsApp(missingRequiredIntegrations[0]!), {
           allowSetupHint: false
         });

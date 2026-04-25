@@ -240,6 +240,173 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("returns an Asana connect link immediately for clear missing Asana requests", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: "dhruv@gmail.com",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [{ role: "USER", content: "show my Asana tasks" }])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "show my Asana tasks"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringMatching(
+        /^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/
+      )
+    );
+  });
+
+  it("returns a Google connect link immediately for clear missing Google app requests", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: null,
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [{ role: "USER", content: "read my Gmail" }])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      notionAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "read my Gmail"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringMatching(
+        /^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/
+      )
+    );
+  });
+
+  it("returns the single missing integration link even in compound requests", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: "dhruv@gmail.com",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: "USER", content: "check my calendar and show my Asana tasks" }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      googleAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "check my calendar and show my Asana tasks"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringMatching(
+        /^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/
+      )
+    );
+  });
+
   it("still runs substantive first-time requests and appends a setup hint", async () => {
     runResponseLoopMock.mockResolvedValue({
       assistantMessage: "I can help with that.",

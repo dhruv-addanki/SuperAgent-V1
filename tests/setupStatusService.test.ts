@@ -35,6 +35,18 @@ describe("setup status service", () => {
         connectUrl: expect.stringContaining("/auth/notion/start?phone=%2B15555550100")
       })
     ]);
+    expect(missingIntegrationsForRequest("show my Asana tasks", status)).toEqual([
+      expect.objectContaining({
+        key: "asana",
+        connectUrl: expect.stringContaining("/auth/asana/start?phone=%2B15555550100")
+      })
+    ]);
+    expect(missingIntegrationsForRequest("check my calendar", status)).toEqual([
+      expect.objectContaining({
+        key: "google",
+        connectUrl: expect.stringContaining("/auth/google/start?phone=%2B15555550100")
+      })
+    ]);
   });
 
   it("shows connected account labels and omits connect prompts for connected integrations", async () => {
