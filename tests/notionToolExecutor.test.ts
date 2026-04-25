@@ -87,6 +87,28 @@ describe("tool executor Notion tools", () => {
     );
   });
 
+  it("supports broad Notion page listing without a query", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: { upsert: vi.fn(async () => undefined) }
+    } as any;
+    const executor = createExecutor(prisma);
+
+    const result = await executor.executeToolCall(
+      "notion_search_pages",
+      { limit: 10 },
+      context("check what i have in Notion")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(searchPagesMock).toHaveBeenCalledWith(undefined, 10);
+    expect(prisma.memoryEntry.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "recent_notion_pages" } }
+      })
+    );
+  });
+
   it("creates Notion pages and logs the write", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },

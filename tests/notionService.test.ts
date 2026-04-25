@@ -44,6 +44,32 @@ describe("Notion service", () => {
     );
   });
 
+  it("can list accessible pages without a query", async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({
+      results: [notionPage({ id: "page_1", title: "Test Private Page" })]
+    }));
+
+    const service = new NotionService("access-token");
+    const pages = await service.searchPages(undefined, 10);
+
+    expect(pages[0]?.title).toBe("Test Private Page");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      page_size: 10,
+      filter: { property: "object", value: "page" }
+    });
+  });
+
+  it("normalizes messy query punctuation before searching", async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ results: [] }));
+
+    const service = new NotionService("access-token");
+    await service.searchPages('**"/test private page."**', 5);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).query).toBe("test private page");
+  });
+
   it("reads page metadata and bounded child block text", async () => {
     fetchMock
       .mockResolvedValueOnce(okResponse(notionPage({ id: "page_1", title: "Meeting Notes" })))

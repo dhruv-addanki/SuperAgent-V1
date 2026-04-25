@@ -262,7 +262,7 @@ export const toolInputSchemas = {
 
   notion_search_pages: z
     .object({
-      query: z.string().min(1),
+      query: z.string().min(1).optional(),
       limit: z.number().int().positive().max(25).optional()
     })
     .strict(),
@@ -384,7 +384,7 @@ export const toolDescriptions: Record<ToolName, string> = {
   asana_delete_task:
     "Delete an existing Asana task by task GID. Use this only when the user clearly asks to delete or remove the task.",
   notion_search_pages:
-    "Search Notion pages by text query. Use this to find Notion pages before reading or appending to them.",
+    "Search Notion pages by optional text query. Omit query to list accessible pages when the user asks what is in Notion or wants a broad Notion check.",
   notion_read_page:
     "Read a Notion page by page ID, including bounded text from its child blocks.",
   notion_create_page:

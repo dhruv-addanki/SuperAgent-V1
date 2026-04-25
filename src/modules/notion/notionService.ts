@@ -15,11 +15,12 @@ interface RequestOptions extends RequestInit {
 export class NotionService {
   constructor(private readonly accessToken: string) {}
 
-  async searchPages(query: string, limit = 10): Promise<NotionPageSummary[]> {
+  async searchPages(query?: string, limit = 10): Promise<NotionPageSummary[]> {
+    const normalizedQuery = normalizeSearchQuery(query);
     const data = await this.request<any>("/search", {
       method: "POST",
       body: JSON.stringify({
-        query,
+        ...(normalizedQuery ? { query: normalizedQuery } : {}),
         page_size: Math.min(Math.max(limit, 1), 25),
         filter: {
           property: "object",
@@ -222,6 +223,15 @@ function normalizePage(page: any): NotionPageSummary | null {
     parentType: typeof page.parent?.type === "string" ? page.parent.type : undefined,
     parentId: page.parent ? parentId(page.parent) : undefined
   };
+}
+
+function normalizeSearchQuery(query: string | undefined): string | undefined {
+  const normalized = query
+    ?.trim()
+    .replace(/^[\s"'`*_/\\.,:;!?()[\]{}-]+/g, "")
+    .replace(/[\s"'`*_/\\.,:;!?()[\]{}-]+$/g, "")
+    .replace(/\s+/g, " ");
+  return normalized || undefined;
 }
 
 function pageTitle(page: any): string {

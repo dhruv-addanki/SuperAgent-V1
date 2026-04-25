@@ -17,6 +17,7 @@ import type {
   UpdatedDocResult,
   WebSearchResult
 } from "../google/googleTypes";
+import type { NotionPageContent, NotionPageSummary } from "../notion/notionTypes";
 import type { ToolExecutionResult } from "./toolExecutor";
 
 interface ReferenceEntity {
@@ -255,6 +256,48 @@ function buildCommunicationEnvelope(
         id: source.url,
         name: source.title ?? source.url
       }))
+    };
+  }
+
+  if (toolName === "notion_search_pages") {
+    const pages = asArray<NotionPageSummary>(result.data);
+    return {
+      app: "notion",
+      outcome: pages.length ? "read_result" : "empty",
+      summary: pages.length
+        ? `Found ${pages.length} accessible Notion ${pages.length === 1 ? "page" : "pages"}.`
+        : "No accessible Notion pages matched.",
+      nextStep: pages.length
+        ? "You can ask me to read one by title or number."
+        : "Open the Notion connect link again and make sure the page is selected in the Notion picker.",
+      referenceEntities: pages.slice(0, 10).map((page) => ({
+        kind: "notion_page",
+        id: page.pageId,
+        name: page.title
+      }))
+    };
+  }
+
+  if (toolName === "notion_read_page") {
+    const page = result.data as NotionPageContent | undefined;
+    return {
+      app: "notion",
+      outcome: page?.pageId ? "read_result" : "empty",
+      summary: page?.pageId
+        ? `Loaded Notion page: ${page.title}.`
+        : "That Notion page could not be loaded.",
+      nextStep: page?.pageId
+        ? "You can ask me to summarize it, rename it, or append to it."
+        : "You can ask me to search Notion again.",
+      referenceEntities: page?.pageId
+        ? [
+            {
+              kind: "notion_page",
+              id: page.pageId,
+              name: page.title
+            }
+          ]
+        : []
     };
   }
 

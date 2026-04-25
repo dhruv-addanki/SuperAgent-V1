@@ -80,10 +80,15 @@ describe("tool schemas", () => {
   it("validates Notion page inputs", () => {
     expect(() =>
       toolInputSchemas.notion_search_pages.parse({
-        query: "meeting",
         limit: 100
       })
     ).toThrow();
+
+    expect(
+      toolInputSchemas.notion_search_pages.parse({
+        limit: 10
+      }).limit
+    ).toBe(10);
 
     expect(
       toolInputSchemas.notion_create_page.parse({
