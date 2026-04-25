@@ -228,7 +228,7 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       ],
       resultSummary: `Current Google Doc: ${value.title ?? "Untitled"}.`,
       hints: [
-        "If the user says same doc, current doc, that doc, or append to it, use the stored Google Doc above."
+        "If the user says same doc, current doc, that doc, read it, summarize it, append to it, or delete it, use the stored Google Doc above. Use docs tools for read/append and drive_delete_file with documentId as fileId for deletion."
       ]
     };
   }
@@ -310,6 +310,10 @@ function summarizeEntry(entry: PromptMemoryEntry): {
         typeof file === "object" && file && typeof (file as { fileId?: unknown }).fileId === "string"
           ? `Drive file: ${(file as { name?: string }).name ?? "Untitled"} (fileId: ${
               (file as { fileId: string }).fileId
+            }${
+              typeof (file as { mimeType?: unknown }).mimeType === "string"
+                ? `, mimeType: ${(file as { mimeType: string }).mimeType}`
+                : ""
             })`
           : null
       )
@@ -319,7 +323,7 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       resultSummary: entities.length ? `Recent Drive files: ${entities.length} available.` : undefined,
       hints: entities.length
         ? [
-            "If the user says same file, that file, or delete the first one, use the stored Drive file IDs."
+            "If the user says same file, that file, read it, summarize it, or delete the first one, use the stored Drive file IDs. For Google Docs, read with docs_read_document and delete with drive_delete_file."
           ]
         : []
     };

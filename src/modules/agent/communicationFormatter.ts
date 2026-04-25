@@ -69,7 +69,9 @@ function buildCommunicationEnvelope(
         toolName === "docs_create_document"
           ? `Created Google Doc: ${doc?.title ?? "Untitled"}.`
           : `Updated Google Doc: ${doc?.title ?? "Untitled"}.`,
-      nextStep: doc?.documentId ? "You can ask me to append more or summarize it." : undefined,
+      nextStep: doc?.documentId
+        ? "You can ask me to summarize, append more, or delete it."
+        : undefined,
       referenceEntities: doc?.documentId
         ? [
             {
@@ -225,7 +227,7 @@ function buildCommunicationEnvelope(
       outcome: doc?.documentId ? "read_result" : "empty",
       summary: doc?.documentId ? doc.summary : "That Google Doc could not be loaded.",
       nextStep: doc?.documentId
-        ? "You can ask me to summarize it or append to it."
+        ? "You can ask me to summarize, append to, or delete it."
         : "You can ask me to search for another document.",
       referenceEntities: doc?.documentId
         ? [
@@ -490,7 +492,7 @@ function writeNextStep(toolName: string): string | undefined {
     return "You can ask me to move it, cancel it, or update the details.";
   }
   if (toolName.startsWith("docs_")) {
-    return "You can ask me to append more or summarize it.";
+    return "You can ask me to summarize, append more, or delete it.";
   }
   if (toolName === "gmail_send_draft") {
     return "You can ask me to draft a follow-up or search related email.";

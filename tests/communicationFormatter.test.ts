@@ -71,6 +71,24 @@ describe("communication formatter", () => {
     });
   });
 
+  it("keeps Google Doc follow-up options aligned with read, append, and delete actions", () => {
+    const formatted = formatToolResultForModel("docs_read_document", {
+      ok: true,
+      data: {
+        documentId: "doc_1",
+        title: "Scratch Doc",
+        summary: "Loaded Google Doc: Scratch Doc"
+      }
+    });
+
+    expect(formatted).toMatchObject({
+      communication: {
+        app: "docs",
+        nextStep: "You can ask me to summarize, append to, or delete it."
+      }
+    });
+  });
+
   it("preserves the underlying data payload for the model", () => {
     const formatted = formatToolResultForModel("gmail_search_threads", {
       ok: true,

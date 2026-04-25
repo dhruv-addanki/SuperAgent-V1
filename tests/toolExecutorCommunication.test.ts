@@ -4,6 +4,7 @@ const listCalendarsMock = vi.fn();
 const listEventsMock = vi.fn();
 const searchFilesMock = vi.fn();
 const readFileMetadataMock = vi.fn();
+const deleteFileMock = vi.fn();
 const readThreadMock = vi.fn();
 
 vi.mock("../src/modules/google/calendarService", () => ({
@@ -16,7 +17,8 @@ vi.mock("../src/modules/google/calendarService", () => ({
 vi.mock("../src/modules/google/driveService", () => ({
   DriveService: vi.fn().mockImplementation(() => ({
     searchFiles: searchFilesMock,
-    readFileMetadata: readFileMetadataMock
+    readFileMetadata: readFileMetadataMock,
+    deleteFile: deleteFileMock
   }))
 }));
 
@@ -34,6 +36,7 @@ describe("tool executor communication context", () => {
     listEventsMock.mockReset();
     searchFilesMock.mockReset();
     readFileMetadataMock.mockReset();
+    deleteFileMock.mockReset();
     readThreadMock.mockReset();
 
     listCalendarsMock.mockResolvedValue([
@@ -65,6 +68,13 @@ describe("tool executor communication context", () => {
       id: "file_2",
       name: "Project Plan",
       mimeType: "application/pdf"
+    });
+
+    deleteFileMock.mockResolvedValue({
+      fileId: "file_1",
+      name: "Launch Notes",
+      mimeType: "application/vnd.google-apps.document",
+      summary: "Moved to trash: Launch Notes"
     });
 
     readThreadMock.mockResolvedValue([
@@ -151,9 +161,54 @@ describe("tool executor communication context", () => {
       }
     );
 
-    expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(3);
     expect(prisma.memoryEntry.upsert.mock.calls[0][0].create.key).toBe("recent_drive_files");
-    expect(prisma.memoryEntry.upsert.mock.calls[1][0].create.key).toBe("recent_drive_files");
+    expect(prisma.memoryEntry.upsert.mock.calls[1][0].create.key).toBe("recent_google_doc");
+    expect(prisma.memoryEntry.upsert.mock.calls[1][0].create.value).toMatchObject({
+      documentId: "file_1",
+      title: "Launch Notes"
+    });
+    expect(prisma.memoryEntry.upsert.mock.calls[2][0].create.key).toBe("recent_drive_files");
+  });
+
+  it("clears the current Google Doc memory after deleting that Drive file", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: {
+        findUnique: vi.fn(async () => ({
+          key: "recent_google_doc",
+          value: {
+            documentId: "file_1",
+            title: "Launch Notes"
+          }
+        })),
+        delete: vi.fn(async () => undefined)
+      }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn(async () => ({})) } as any,
+      { getAccessTokenForUser: vi.fn(async () => "asana-token") } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "drive_delete_file",
+      { fileId: "file_1" },
+      {
+        user: { id: "user_1", timezone: "America/New_York" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "delete that doc"
+      }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      userMessage: "Moved to trash: Launch Notes"
+    });
+    expect(prisma.memoryEntry.delete).toHaveBeenCalledWith({
+      where: { userId_key: { userId: "user_1", key: "recent_google_doc" } }
+    });
   });
 
   it("stores the most recently read Gmail thread for follow-up actions", async () => {

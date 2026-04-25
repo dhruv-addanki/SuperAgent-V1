@@ -32,7 +32,8 @@ import { getAvailableToolDefinitions } from "./toolRegistry";
 import { runResponseLoop } from "./responseLoop";
 import {
   buildConversationContext,
-  formatConversationContextForPrompt
+  formatConversationContextForPrompt,
+  type PromptMemoryEntry
 } from "./conversationContext";
 import {
   formatMissingIntegrationForWhatsApp,
@@ -243,6 +244,29 @@ export class AgentOrchestrator {
           : `${ambiguousBulkComplete.taskCount} listed tasks`;
         await replyToUser(
           `Do you mean ${scopeLabel}, or every incomplete Asana task I can see?`
+        );
+        return;
+      }
+
+      const recentGoogleDocToDelete = matchRecentGoogleDocDeleteRequest(
+        preparedInput.text,
+        memoryEntries
+      );
+      if (recentGoogleDocToDelete) {
+        const result = await this.toolExecutor.executeToolCall(
+          "drive_delete_file",
+          { fileId: recentGoogleDocToDelete.documentId },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+        await replyToUser(
+          result.userMessage ??
+            (result.ok
+              ? `Moved to trash: ${recentGoogleDocToDelete.title ?? "Google Doc"}`
+              : "I couldn't delete that Google Doc right now.")
         );
         return;
       }
@@ -575,8 +599,11 @@ export class AgentOrchestrator {
     );
 
     if (!pending) {
-      await this.reply(input.conversation.id, input.to, "There isn't anything pending to confirm right now.");
-      return true;
+      if (input.intent === "CANCEL") {
+        await this.reply(input.conversation.id, input.to, "Nothing to cancel.");
+        return true;
+      }
+      return false;
     }
 
     if (input.intent === "CANCEL") {
@@ -634,4 +661,64 @@ function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {
 function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): string {
   const hint = formatSetupHintForWhatsApp(setupStatus);
   return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
+
+function matchRecentGoogleDocDeleteRequest(
+  text: string,
+  memoryEntries: PromptMemoryEntry[]
+): { documentId: string; title?: string } | null {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").trim();
+  const asksDelete = /\b(delete|trash|remove|get rid of)\b/.test(normalized);
+  if (!asksDelete) return null;
+
+  const doc = latestRecentGoogleDoc(memoryEntries);
+  if (!doc) return null;
+
+  if (/\b(google doc|doc|docs|document)\b/.test(normalized)) return doc;
+
+  const pronounTarget =
+    /\b(delete|trash|remove|get rid of)\s+(it|that|this|same one|current one)\b/.test(
+      normalized
+    ) || /\b(delete|trash|remove|get rid of)\s+(that|this|same|current)\b/.test(normalized);
+  if (!pronounTarget) return null;
+
+  return hasCompetingRecentActionTarget(memoryEntries) ? null : doc;
+}
+
+function latestRecentGoogleDoc(
+  memoryEntries: PromptMemoryEntry[]
+): { documentId: string; title?: string } | null {
+  const entry = memoryEntries.find(
+    (candidate) => candidate.key === "recent_google_doc" && !isStaleRecentMemory(candidate)
+  );
+  const value = entry?.value;
+  if (!value || typeof value !== "object") return null;
+  const documentId = (value as { documentId?: unknown }).documentId;
+  if (typeof documentId !== "string" || !documentId) return null;
+  const title = (value as { title?: unknown }).title;
+  return {
+    documentId,
+    title: typeof title === "string" ? title : undefined
+  };
+}
+
+function hasCompetingRecentActionTarget(memoryEntries: PromptMemoryEntry[]): boolean {
+  return memoryEntries.some((entry) => {
+    if (entry.key === "recent_google_doc") return false;
+    if (!entry.key.startsWith("recent_")) return false;
+    if (isStaleRecentMemory(entry)) return false;
+    return [
+      "recent_asana_tasks",
+      "recent_calendar_events",
+      "recent_drive_files",
+      "recent_gmail_threads",
+      "recent_notion_page",
+      "recent_notion_pages",
+      "recent_automations"
+    ].includes(entry.key);
+  });
+}
+
+function isStaleRecentMemory(entry: PromptMemoryEntry): boolean {
+  return Date.now() - entry.updatedAt.getTime() > 1000 * 60 * 60 * 24 * 30;
 }

@@ -600,6 +600,101 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("uses chat history instead of dead-ending when yes has no pending backend action", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "I deleted the current doc.",
+      toolRounds: 1
+    });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: "dhruv@example.com",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          {
+            role: "USER",
+            content: "yes"
+          },
+          {
+            role: "ASSISTANT",
+            content: "Do you want me to delete the current Google Doc?"
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_google_doc",
+            value: {
+              documentId: "doc_123",
+              title: "Scratch Doc"
+            },
+            updatedAt: new Date()
+          }
+        ]),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      googleAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      asanaAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      notionAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "yes"
+    });
+
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(runResponseLoopMock.mock.calls[0][0].input).toEqual([
+      {
+        role: "assistant",
+        content: "Do you want me to delete the current Google Doc?"
+      },
+      {
+        role: "user",
+        content: "yes"
+      }
+    ]);
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
+      "Google Doc: Scratch Doc (documentId: doc_123)"
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "I deleted the current doc."
+    );
+    expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("pending to confirm")
+    );
+  });
+
   it("returns a short Google connect link when a calendar shortcut needs auth", async () => {
     const prisma = {
       user: {
@@ -720,6 +815,88 @@ describe("agent orchestrator", () => {
     expect(instructions).toContain("Active app/workflow: docs");
     expect(instructions).toContain("Google Doc: Strategy Notes (documentId: doc_123)");
     expect(instructions).not.toContain("Old task");
+  });
+
+  it("deletes the current Google Doc directly when recent doc context is clear", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          fileId: "doc_123",
+          name: "Scratch Doc"
+        },
+        userMessage: "Moved to trash: Scratch Doc"
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: "dhruv@example.com",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_google_doc",
+            value: {
+              documentId: "doc_123",
+              title: "Scratch Doc"
+            },
+            updatedAt: new Date()
+          }
+        ]),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      googleAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      asanaAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      notionAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "delete the current doc"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "drive_delete_file",
+      { fileId: "doc_123" },
+      expect.objectContaining({
+        latestUserMessage: "delete the current doc"
+      })
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Moved to trash: Scratch Doc"
+    );
   });
 
   it("short-circuits generic Asana due-today requests before the response loop", async () => {

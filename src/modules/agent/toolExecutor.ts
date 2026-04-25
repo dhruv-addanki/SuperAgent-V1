@@ -75,6 +75,7 @@ const NO_DUE_DATE_PATTERNS = [
 ];
 const TIME_OF_DAY_PATTERN =
   /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b|\bnoon\b|\bmidnight\b/i;
+const GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document";
 
 function requestsNoDueDate(latestUserMessage: string): boolean {
   const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'");
@@ -163,7 +164,7 @@ export class ToolExecutor {
 
   private async rememberRecentDocument(
     userId: string,
-    document: { documentId: string; title: string; url: string }
+    document: { documentId: string; title: string; url?: string }
   ): Promise<void> {
     await this.prisma.memoryEntry.upsert({
       where: { userId_key: { userId, key: "recent_google_doc" } },
@@ -324,6 +325,46 @@ export class ToolExecutor {
         value: normalizedFiles,
         confidence: 1
       }
+    });
+  }
+
+  private async rememberRecentGoogleDocFromDriveFiles(
+    userId: string,
+    files: DriveFileSummary[]
+  ): Promise<void> {
+    const googleDocs = files.filter(
+      (file) => file.id && file.mimeType === GOOGLE_DOC_MIME_TYPE
+    );
+    if (googleDocs.length !== 1) return;
+
+    const doc = googleDocs[0]!;
+    await this.rememberRecentDocument(userId, {
+      documentId: doc.id,
+      title: doc.name,
+      url: doc.webViewLink
+    });
+  }
+
+  private async forgetRecentGoogleDocIfDeleted(
+    userId: string,
+    fileId: string
+  ): Promise<void> {
+    const delegate = (this.prisma as any).memoryEntry;
+    if (!delegate?.findUnique || !delegate?.delete) return;
+
+    const entry = await delegate.findUnique({
+      where: { userId_key: { userId, key: "recent_google_doc" } }
+    });
+    const documentId =
+      entry?.value &&
+      typeof entry.value === "object" &&
+      typeof (entry.value as { documentId?: unknown }).documentId === "string"
+        ? (entry.value as { documentId: string }).documentId
+        : null;
+
+    if (documentId !== fileId) return;
+    await delegate.delete({
+      where: { userId_key: { userId, key: "recent_google_doc" } }
     });
   }
 
@@ -1313,6 +1354,7 @@ export class ToolExecutor {
         const service = new DriveService(auth);
         const data = await service.searchFiles(input);
         await this.rememberRecentDriveFiles(context.user.id, data);
+        await this.rememberRecentGoogleDocFromDriveFiles(context.user.id, data);
         return { ok: true, data };
       }
 
@@ -1320,6 +1362,7 @@ export class ToolExecutor {
         const service = new DriveService(auth);
         const data = await service.readFileMetadata(input.fileId);
         await this.rememberRecentDriveFiles(context.user.id, [data]);
+        await this.rememberRecentGoogleDocFromDriveFiles(context.user.id, [data]);
         return { ok: true, data };
       }
 
@@ -1334,6 +1377,7 @@ export class ToolExecutor {
           responsePayload: data,
           status: "executed"
         });
+        await this.forgetRecentGoogleDocIfDeleted(context.user.id, input.fileId);
         return { ok: true, data, userMessage: data.summary };
       }
 

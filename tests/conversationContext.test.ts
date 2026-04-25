@@ -45,9 +45,8 @@ describe("conversation context", () => {
       "Google Doc: Strategy Notes (documentId: doc_123)"
     ]);
     expect(context.recentResults).toEqual(["Current Google Doc: Strategy Notes."]);
-    expect(context.communicationHints).toContain(
-      "If the user says same doc, current doc, that doc, or append to it, use the stored Google Doc above."
-    );
+    expect(context.communicationHints.join("\n")).toContain("delete it");
+    expect(context.communicationHints.join("\n")).toContain("drive_delete_file");
     expect(context.userPreferences).toEqual(["Preferred email tone: direct"]);
 
     const formatted = formatConversationContextForPrompt(context);
