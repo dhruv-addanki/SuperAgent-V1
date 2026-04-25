@@ -35,10 +35,12 @@ import {
   formatConversationContextForPrompt
 } from "./conversationContext";
 import {
+  formatMissingIntegrationForWhatsApp,
   formatSetupHintForWhatsApp,
   formatSetupStatusForWhatsApp,
   isGreetingOnly,
   isSetupStatusRequest,
+  missingIntegrationsForRequest,
   setupStatusProfileLines,
   SetupStatusService,
   type SetupStatus
@@ -165,6 +167,7 @@ export class AgentOrchestrator {
       const setupStatus = await this.setupStatusService.getStatus(user);
       const setupRequest = isSetupStatusRequest(preparedInput.text);
       const firstInteraction = isFirstInteraction(history);
+      const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
       const appendSetupHint =
         firstInteraction &&
         !setupRequest &&
@@ -190,7 +193,20 @@ export class AgentOrchestrator {
         return;
       }
 
-      const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
+      const missingRequiredIntegrations = missingIntegrationsForRequest(
+        preparedInput.text,
+        setupStatus
+      );
+      if (missingRequiredIntegrations.length > 1) {
+        await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
+        return;
+      }
+      if (!isCompoundIntent && missingRequiredIntegrations.length === 1) {
+        await replyToUser(formatMissingIntegrationForWhatsApp(missingRequiredIntegrations[0]!), {
+          allowSetupHint: false
+        });
+        return;
+      }
 
       const confirmationIntent = parseConfirmationIntent(preparedInput.text);
       if (confirmationIntent) {

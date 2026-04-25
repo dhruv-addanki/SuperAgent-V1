@@ -1,5 +1,6 @@
 import type { PrismaClient, User } from "@prisma/client";
 import { env } from "../../config/env";
+import { detectReferencedApps, type ReferencedApp } from "./compoundIntent";
 
 export type SetupIntegrationKey = "google" | "asana" | "notion";
 
@@ -26,32 +27,32 @@ export class SetupStatusService {
   ): Promise<SetupStatus> {
     const prisma = this.prisma as any;
     const [googleAccount, asanaAccount, notionAccount] = await Promise.all([
-      prisma.googleAccount?.findUnique?.({ where: { userId: user.id } }) ?? null,
-      prisma.asanaAccount?.findUnique?.({ where: { userId: user.id } }) ?? null,
-      prisma.notionAccount?.findUnique?.({ where: { userId: user.id } }) ?? null
+      lookupAccount(prisma.googleAccount, user.id),
+      lookupAccount(prisma.asanaAccount, user.id),
+      lookupAccount(prisma.notionAccount, user.id)
     ]);
 
     const integrations: SetupIntegrationStatus[] = [
       {
         key: "google",
         label: "Google",
-        connected: Boolean(googleAccount),
+        connected: googleAccount === undefined ? true : Boolean(googleAccount),
         detail: user.googleEmail ?? undefined,
-        connectUrl: googleAccount ? undefined : connectUrl("/auth/google/start", user.whatsappPhone)
+        connectUrl: googleAccount === null ? connectUrl("/auth/google/start", user.whatsappPhone) : undefined
       },
       {
         key: "asana",
         label: "Asana",
-        connected: Boolean(asanaAccount),
+        connected: asanaAccount === undefined ? true : Boolean(asanaAccount),
         detail: asanaAccount?.asanaName ?? asanaAccount?.asanaEmail ?? undefined,
-        connectUrl: asanaAccount ? undefined : connectUrl("/auth/asana/start", user.whatsappPhone)
+        connectUrl: asanaAccount === null ? connectUrl("/auth/asana/start", user.whatsappPhone) : undefined
       },
       {
         key: "notion",
         label: "Notion",
-        connected: Boolean(notionAccount),
+        connected: notionAccount === undefined ? true : Boolean(notionAccount),
         detail: notionAccount?.workspaceName ?? undefined,
-        connectUrl: notionAccount ? undefined : connectUrl("/auth/notion/start", user.whatsappPhone)
+        connectUrl: notionAccount === null ? connectUrl("/auth/notion/start", user.whatsappPhone) : undefined
       }
     ];
 
@@ -102,6 +103,30 @@ export function formatSetupStatusForWhatsApp(status: SetupStatus): string {
   return lines.join("\n");
 }
 
+export function missingIntegrationsForRequest(
+  text: string,
+  status: SetupStatus
+): SetupIntegrationStatus[] {
+  const required = new Set(
+    detectReferencedApps(text)
+      .map(integrationForApp)
+      .filter((integration): integration is SetupIntegrationKey => Boolean(integration))
+  );
+
+  if (!required.size) return [];
+  return status.integrations.filter(
+    (integration) => required.has(integration.key) && !integration.connected
+  );
+}
+
+export function formatMissingIntegrationForWhatsApp(
+  integration: SetupIntegrationStatus
+): string {
+  return integration.connectUrl
+    ? `Connect ${integration.label} first: ${integration.connectUrl}`
+    : `Connect ${integration.label} first.`;
+}
+
 export function formatSetupHintForWhatsApp(status: SetupStatus): string {
   const missing = status.integrations
     .filter((integration) => !integration.connected)
@@ -125,14 +150,34 @@ export function setupStatusProfileLines(status: SetupStatus, timezone: string): 
   return [
     `Timezone: ${timezone}`,
     `Connected integrations: ${connected.length ? connected.join(", ") : "None"}`,
-    `Missing integrations: ${missing.length ? missing.join(", ") : "None"}`
+    `Missing integrations: ${missing.length ? missing.join(", ") : "None"}`,
+    ...status.integrations
+      .filter((integration) => !integration.connected && integration.connectUrl)
+      .map((integration) => `${integration.label} connect link: ${integration.connectUrl}`)
   ];
+}
+
+function integrationForApp(app: ReferencedApp): SetupIntegrationKey | null {
+  if (app === "notion") return "notion";
+  if (app === "asana") return "asana";
+  if (app === "calendar" || app === "gmail" || app === "drive" || app === "docs") {
+    return "google";
+  }
+  return null;
 }
 
 function connectUrl(path: string, phone: string): string {
   const url = new URL(path, env.APP_BASE_URL);
   url.searchParams.set("phone", phone);
   return url.toString();
+}
+
+async function lookupAccount(
+  delegate: { findUnique?: (input: { where: { userId: string } }) => Promise<unknown> } | undefined,
+  userId: string
+): Promise<any | null | undefined> {
+  if (!delegate?.findUnique) return undefined;
+  return delegate.findUnique({ where: { userId } });
 }
 
 function normalizeMessage(text: string): string {

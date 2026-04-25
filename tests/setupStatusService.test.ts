@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   formatSetupStatusForWhatsApp,
+  missingIntegrationsForRequest,
   SetupStatusService,
   setupStatusProfileLines
 } from "../src/modules/agent/setupStatusService";
@@ -28,6 +29,12 @@ describe("setup status service", () => {
     expect(formatSetupStatusForWhatsApp(status)).toContain(
       "Google powers Calendar, Gmail, Drive, and Docs."
     );
+    expect(missingIntegrationsForRequest("check what i have in notion", status)).toEqual([
+      expect.objectContaining({
+        key: "notion",
+        connectUrl: expect.stringContaining("/auth/notion/start?phone=%2B15555550100")
+      })
+    ]);
   });
 
   it("shows connected account labels and omits connect prompts for connected integrations", async () => {
