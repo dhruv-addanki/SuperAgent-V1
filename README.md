@@ -235,7 +235,7 @@ The app currently requests these Asana scopes:
 http://localhost:3000/auth/notion/callback
 ```
 
-3. Enable at least Read Content and Insert Content capabilities.
+3. Enable at least Read Content, Insert Content, and Update Content capabilities.
 4. Put `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, and `NOTION_REDIRECT_URI` in `.env`.
 
 The assistant replies with a Notion connect link when a Notion tool is used without a connected Notion account.
@@ -323,6 +323,7 @@ Write tools:
 - `asana_delete_task`
 - `notion_create_page`
 - `notion_append_page`
+- `notion_update_page_title`
 
 Read-only mode removes write tools from the OpenAI tool list and blocks write execution if called unexpectedly.
 

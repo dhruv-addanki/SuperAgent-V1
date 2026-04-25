@@ -261,6 +261,13 @@ export const toolInputSchemas = {
       pageId: z.string().min(1),
       content: z.string().min(1)
     })
+    .strict(),
+
+  notion_update_page_title: z
+    .object({
+      pageId: z.string().min(1),
+      title: z.string().min(1)
+    })
     .strict()
 } as const;
 
@@ -323,7 +330,9 @@ export const toolDescriptions: Record<ToolName, string> = {
   notion_create_page:
     "Create a Notion page. Include parentPageId when the user selected a parent page or recent Notion context provides one.",
   notion_append_page:
-    "Append content to an existing Notion page by page ID. Use this for follow-ups like add this to that page."
+    "Append content to an existing Notion page by page ID. Use this for follow-ups like add this to that page.",
+  notion_update_page_title:
+    "Rename an existing Notion page title by page ID. Use this when the user clearly asks to rename, retitle, or change the title of a Notion page."
 };
 
 export const readOnlyToolNames = [
@@ -361,7 +370,8 @@ export const writeToolNames = [
   "asana_update_task",
   "asana_delete_task",
   "notion_create_page",
-  "notion_append_page"
+  "notion_append_page",
+  "notion_update_page_title"
 ] as const satisfies readonly ToolName[];
 
 export function isToolName(value: string): value is ToolName {

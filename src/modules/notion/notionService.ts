@@ -117,6 +117,32 @@ export class NotionService {
     };
   }
 
+  async updatePageTitle(input: { pageId: string; title: string }): Promise<NotionWriteSummary> {
+    const currentPage = await this.request<any>(`/pages/${encodeURIComponent(input.pageId)}`);
+    const titlePropertyName = titlePropertyKey(currentPage) ?? "title";
+    const page = await this.request<any>(`/pages/${encodeURIComponent(input.pageId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        properties: {
+          [titlePropertyName]: {
+            title: richText(input.title)
+          }
+        }
+      })
+    });
+
+    const summary = normalizePage(page) ?? {
+      pageId: input.pageId,
+      title: input.title,
+      url: page?.url as string | undefined
+    };
+
+    return {
+      ...summary,
+      summary: `Renamed Notion page: ${summary.title}`
+    };
+  }
+
   private async appendBlocks(pageId: string, blocks: Array<Record<string, unknown>>): Promise<void> {
     const chunks = chunk(blocks, MAX_CHILDREN_PER_REQUEST);
     for (const children of chunks) {
@@ -213,6 +239,14 @@ function pageTitle(page: any): string {
   }
 
   return "Untitled";
+}
+
+function titlePropertyKey(page: any): string | null {
+  const properties = page.properties && typeof page.properties === "object" ? page.properties : {};
+  for (const [key, property] of Object.entries(properties) as Array<[string, any]>) {
+    if (property?.type === "title") return key;
+  }
+  return null;
 }
 
 function parentId(parent: any): string | undefined {

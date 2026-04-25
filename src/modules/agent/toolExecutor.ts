@@ -733,7 +733,11 @@ export class ToolExecutor {
             responsePayload: data,
             status: "executed"
           });
-          return { ok: true, data, userMessage: `Created: ${data.title}${data.url ? `\n${data.url}` : ""}` };
+          return {
+            ok: true,
+            data,
+            userMessage: `Created: ${data.title}${data.url ? `\n${data.url}` : ""}`
+          };
         }
 
         if (toolName === "notion_append_page") {
@@ -747,7 +751,29 @@ export class ToolExecutor {
             responsePayload: data,
             status: "executed"
           });
-          return { ok: true, data, userMessage: `Updated: ${data.title}${data.url ? `\n${data.url}` : ""}` };
+          return {
+            ok: true,
+            data,
+            userMessage: `Updated: ${data.title}${data.url ? `\n${data.url}` : ""}`
+          };
+        }
+
+        if (toolName === "notion_update_page_title") {
+          const data = await service.updatePageTitle(input);
+          await this.rememberRecentNotionPage(context.user.id, data);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "notion_update_page_title",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: "executed"
+          });
+          return {
+            ok: true,
+            data,
+            userMessage: `Renamed: ${data.title}${data.url ? `\n${data.url}` : ""}`
+          };
         }
       }
 

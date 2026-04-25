@@ -56,6 +56,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "Use notion_read_page when the user asks to read, summarize, inspect, or answer questions about a Notion page.",
     "Use notion_create_page when the user clearly asks to create a new Notion page. Include parentPageId only when the user selected a parent page or recent Notion context provides one.",
     "Use notion_append_page when the user asks to add content to an existing Notion page.",
+    "Use notion_update_page_title when the user asks to rename, retitle, or change the title of an existing Notion page.",
     "If the user asks about Asana tasks, My Tasks, project tasks, due tasks, or reassigning/completing a task, use the Asana tools.",
     "For generic personal Asana task requests like 'my tasks', 'what is due', 'due today', 'due tomorrow', or 'show my tasks', prefer asana_list_my_tasks.",
     "For project browsing like 'show tasks in Scanis', prefer asana_list_project_tasks instead of asana_search_tasks.",

@@ -30,6 +30,7 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "asana_delete_task")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_create_page")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_append_page")).toBe(false);
+    expect(tools.some((tool) => tool.name === "notion_update_page_title")).toBe(false);
     expect(tools.some((tool) => tool.name === "web_search")).toBe(true);
     expect(tools.some((tool) => tool.name === "calendar_list_events")).toBe(true);
     expect(tools.some((tool) => tool.name === "docs_read_document")).toBe(true);
@@ -93,5 +94,12 @@ describe("tool schemas", () => {
         content: "Follow up"
       }).pageId
     ).toBe("page_1");
+
+    expect(
+      toolInputSchemas.notion_update_page_title.parse({
+        pageId: "page_1",
+        title: "Updated Notes"
+      }).title
+    ).toBe("Updated Notes");
   });
 });

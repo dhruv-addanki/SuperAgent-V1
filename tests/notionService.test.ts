@@ -110,6 +110,25 @@ describe("Notion service", () => {
     expect(JSON.parse(fetchMock.mock.calls[2][1].body).children).toHaveLength(1);
   });
 
+  it("updates page titles using the page title property name", async () => {
+    fetchMock
+      .mockResolvedValueOnce(okResponse(notionPage({ id: "page_1", title: "Old Title" })))
+      .mockResolvedValueOnce(okResponse(notionPage({ id: "page_1", title: "New Title" })));
+
+    const service = new NotionService("access-token");
+    const result = await service.updatePageTitle({
+      pageId: "page_1",
+      title: "New Title"
+    });
+
+    expect(result.summary).toBe("Renamed Notion page: New Title");
+    expect(fetchMock.mock.calls[1][0]).toContain("/pages/page_1");
+    const [, init] = fetchMock.mock.calls[1];
+    const body = JSON.parse(init.body);
+    expect(init.method).toBe("PATCH");
+    expect(body.properties.Name.title[0].text.content).toBe("New Title");
+  });
+
   it("maps page access failures to a user-facing error", async () => {
     fetchMock.mockResolvedValueOnce(errorResponse(403, "restricted"));
 

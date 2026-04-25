@@ -4,13 +4,15 @@ const searchPagesMock = vi.fn();
 const readPageMock = vi.fn();
 const createPageMock = vi.fn();
 const appendToPageMock = vi.fn();
+const updatePageTitleMock = vi.fn();
 
 vi.mock("../src/modules/notion/notionService", () => ({
   NotionService: vi.fn().mockImplementation(() => ({
     searchPages: searchPagesMock,
     readPage: readPageMock,
     createPage: createPageMock,
-    appendToPage: appendToPageMock
+    appendToPage: appendToPageMock,
+    updatePageTitle: updatePageTitleMock
   }))
 }));
 
@@ -22,6 +24,7 @@ describe("tool executor Notion tools", () => {
     readPageMock.mockReset();
     createPageMock.mockReset();
     appendToPageMock.mockReset();
+    updatePageTitleMock.mockReset();
     searchPagesMock.mockResolvedValue([
       {
         pageId: "page_1",
@@ -48,6 +51,12 @@ describe("tool executor Notion tools", () => {
       title: "Scanis Plan",
       url: "https://notion.so/page_1",
       summary: "Updated Notion page: Scanis Plan"
+    });
+    updatePageTitleMock.mockResolvedValue({
+      pageId: "page_1",
+      title: "Renamed Plan",
+      url: "https://notion.so/page_1",
+      summary: "Renamed Notion page: Renamed Plan"
     });
   });
 
@@ -129,6 +138,35 @@ describe("tool executor Notion tools", () => {
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId_key: { userId: "user_1", key: "recent_notion_page" } }
+      })
+    );
+  });
+
+  it("renames Notion pages and logs the write", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: { upsert: vi.fn(async () => undefined) }
+    } as any;
+    const executor = createExecutor(prisma);
+
+    const result = await executor.executeToolCall(
+      "notion_update_page_title",
+      { pageId: "page_1", title: "Renamed Plan" },
+      context("rename that Notion page to Renamed Plan")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.userMessage).toContain("Renamed: Renamed Plan");
+    expect(updatePageTitleMock).toHaveBeenCalledWith({
+      pageId: "page_1",
+      title: "Renamed Plan"
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actionType: "notion_update_page_title",
+          status: "executed"
+        })
       })
     );
   });
