@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import { env } from "../../config/env";
 import { WHATSAPP_TEXT_LIMIT } from "../../config/constants";
 import { ExternalApiError } from "../../lib/errors";
-import type { SendTextResult, SendTypingIndicatorResult } from "./whatsappTypes";
+import type {
+  SendTemplateResult,
+  SendTextResult,
+  SendTypingIndicatorResult
+} from "./whatsappTypes";
 
 export class WhatsAppService {
   private get messagesUrl(): string {
@@ -39,6 +43,62 @@ export class WhatsAppService {
       throw new ExternalApiError(
         "whatsapp",
         "I wasn't able to send the WhatsApp reply.",
+        new Error(errorBody)
+      );
+    }
+
+    const data = (await response.json()) as any;
+    return { messageId: data.messages?.[0]?.id };
+  }
+
+  async sendTemplateMessage(input: {
+    to: string;
+    templateName: string;
+    languageCode: string;
+    bodyParameters?: string[];
+  }): Promise<SendTemplateResult> {
+    if (env.NODE_ENV !== "production" && env.WHATSAPP_ACCESS_TOKEN.startsWith("dev-")) {
+      return { messageId: `dev-template-${Date.now()}` };
+    }
+
+    const components = input.bodyParameters?.length
+      ? [
+          {
+            type: "body",
+            parameters: input.bodyParameters.map((parameter) => ({
+              type: "text",
+              text: this.formatText(parameter)
+            }))
+          }
+        ]
+      : undefined;
+
+    const response = await fetch(this.messagesUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: input.to,
+        type: "template",
+        template: {
+          name: input.templateName,
+          language: {
+            code: input.languageCode
+          },
+          ...(components ? { components } : {})
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new ExternalApiError(
+        "whatsapp",
+        "I wasn't able to send the WhatsApp automation message.",
         new Error(errorBody)
       );
     }

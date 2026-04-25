@@ -28,6 +28,19 @@ enum PendingActionStatus {
   FAILED    @map("failed")
 }
 
+enum AutomationStatus {
+  ACTIVE  @map("active")
+  PAUSED  @map("paused")
+  DELETED @map("deleted")
+}
+
+enum AutomationRunStatus {
+  RUNNING @map("running")
+  SUCCESS @map("success")
+  FAILED  @map("failed")
+  SKIPPED @map("skipped")
+}
+
 model User {
   id             String          @id @default(cuid())
   whatsappPhone String          @unique
@@ -43,6 +56,7 @@ model User {
   memoryEntries MemoryEntry[]
   pendingActions PendingAction[]
   auditLogs      AuditLog[]
+  automations    Automation[]
 }
 
 model GoogleAccount {
@@ -102,6 +116,7 @@ model Conversation {
   user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages       Message[]
   pendingActions PendingAction[]
+  automations    Automation[]
 
   @@index([userId, channel])
 }
@@ -168,4 +183,49 @@ model AuditLog {
 
   @@index([userId, createdAt])
   @@index([toolName, createdAt])
+}
+
+model Automation {
+  id             String           @id @default(cuid())
+  userId         String
+  conversationId String?
+  channel        Channel          @default(WHATSAPP)
+  name           String
+  prompt         String
+  schedule       Json
+  scheduleLabel  String
+  timezone       String
+  status         AutomationStatus @default(ACTIVE)
+  nextRunAt      DateTime
+  lastRunAt      DateTime?
+  lockedAt       DateTime?
+  lockedBy       String?
+  lockExpiresAt  DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  runs         AutomationRun[]
+
+  @@index([status, nextRunAt])
+  @@index([userId, status])
+  @@index([lockExpiresAt])
+}
+
+model AutomationRun {
+  id           String              @id @default(cuid())
+  automationId String
+  scheduledFor DateTime
+  startedAt    DateTime            @default(now())
+  finishedAt   DateTime?
+  status       AutomationRunStatus
+  outputText   String?
+  errorMessage String?
+  createdAt    DateTime            @default(now())
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId, scheduledFor])
+  @@index([status, startedAt])
 }

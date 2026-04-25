@@ -39,6 +39,8 @@ const envSchema = z
     WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().optional().default(""),
     WHATSAPP_APP_SECRET: z.string().optional().default(""),
     WHATSAPP_MAX_AUDIO_BYTES: z.coerce.number().int().positive().default(25_000_000),
+    WHATSAPP_AUTOMATION_TEMPLATE_NAME: z.string().optional().default(""),
+    WHATSAPP_AUTOMATION_TEMPLATE_LANGUAGE: z.string().min(1).default("en_US"),
 
     GOOGLE_CLIENT_ID: z.string().min(1).default("dev-google-client-id"),
     GOOGLE_CLIENT_SECRET: z.string().min(1).default("dev-google-client-secret"),
@@ -58,7 +60,10 @@ const envSchema = z
     PENDING_ACTION_TTL_MINUTES: z.coerce.number().int().positive().default(30),
     MAX_TOOL_ROUNDS: z.coerce.number().int().positive().max(10).default(3),
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
-    USE_REDIS_QUEUE: booleanFromString
+    USE_REDIS_QUEUE: booleanFromString,
+    AUTOMATION_RUNNER_ENABLED: booleanFromString,
+    AUTOMATION_POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+    AUTOMATION_BATCH_SIZE: z.coerce.number().int().positive().max(50).default(10)
   })
   .superRefine((value, ctx) => {
     if (value.NODE_ENV !== "production") return;
@@ -92,6 +97,15 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["NOTION_REDIRECT_URI"],
         message: "NOTION_REDIRECT_URI must be set to a public production callback URL"
+      });
+    }
+
+    if (value.AUTOMATION_RUNNER_ENABLED && !value.WHATSAPP_AUTOMATION_TEMPLATE_NAME) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["WHATSAPP_AUTOMATION_TEMPLATE_NAME"],
+        message:
+          "WHATSAPP_AUTOMATION_TEMPLATE_NAME must be set when scheduled automations are enabled in production"
       });
     }
   });

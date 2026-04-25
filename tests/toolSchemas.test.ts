@@ -31,6 +31,10 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "notion_create_page")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_append_page")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_update_page_title")).toBe(false);
+    expect(tools.some((tool) => tool.name === "automation_create")).toBe(false);
+    expect(tools.some((tool) => tool.name === "automation_pause")).toBe(false);
+    expect(tools.some((tool) => tool.name === "automation_resume")).toBe(false);
+    expect(tools.some((tool) => tool.name === "automation_delete")).toBe(false);
     expect(tools.some((tool) => tool.name === "web_search")).toBe(true);
     expect(tools.some((tool) => tool.name === "calendar_list_events")).toBe(true);
     expect(tools.some((tool) => tool.name === "docs_read_document")).toBe(true);
@@ -39,6 +43,7 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "asana_list_project_tasks")).toBe(true);
     expect(tools.some((tool) => tool.name === "notion_search_pages")).toBe(true);
     expect(tools.some((tool) => tool.name === "notion_read_page")).toBe(true);
+    expect(tools.some((tool) => tool.name === "automation_list")).toBe(true);
   });
 
   it("validates Asana task inputs", () => {
@@ -101,5 +106,35 @@ describe("tool schemas", () => {
         title: "Updated Notes"
       }).title
     ).toBe("Updated Notes");
+  });
+
+  it("validates automation inputs", () => {
+    expect(() =>
+      toolInputSchemas.automation_create.parse({
+        prompt: "Summarize my email",
+        schedule: {
+          frequency: "daily",
+          time: "8 AM"
+        }
+      })
+    ).toThrow();
+
+    expect(
+      toolInputSchemas.automation_create.parse({
+        name: "Morning brief",
+        prompt: "Summarize important emails and list calendar events",
+        schedule: {
+          frequency: "daily",
+          time: "08:00"
+        },
+        timezone: "America/New_York"
+      }).schedule.time
+    ).toBe("08:00");
+
+    expect(
+      toolInputSchemas.automation_pause.parse({
+        number: 1
+      }).number
+    ).toBe(1);
   });
 });

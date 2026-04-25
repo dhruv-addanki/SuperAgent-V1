@@ -12,6 +12,31 @@ const isoDateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const isoDateOrDateTime = z.union([isoDate, isoDateOnly]);
 const asanaSortBy = z.enum(["due", "createdAt", "modifiedAt", "completedAt"]);
 const sortDirection = z.enum(["asc", "desc"]);
+const automationSchedule = z
+  .object({
+    frequency: z.enum(["daily", "weekdays", "weekly"]),
+    time: z.string().regex(/^\d{2}:\d{2}$/),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const [hours, minutes] = value.time.split(":").map(Number);
+    if (hours === undefined || minutes === undefined || hours > 23 || minutes > 59) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["time"],
+        message: "time must be a valid HH:mm local time"
+      });
+    }
+
+    if (value.frequency === "weekly" && !value.daysOfWeek?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["daysOfWeek"],
+        message: "weekly schedules require at least one day"
+      });
+    }
+  });
 
 export const toolInputSchemas = {
   gmail_search_threads: z
@@ -268,6 +293,41 @@ export const toolInputSchemas = {
       pageId: z.string().min(1),
       title: z.string().min(1)
     })
+    .strict(),
+
+  automation_create: z
+    .object({
+      name: z.string().min(1).max(120).optional(),
+      prompt: z.string().min(1).max(4000),
+      schedule: automationSchedule,
+      timezone: z.string().min(1).optional()
+    })
+    .strict(),
+
+  automation_list: z.object({}).strict(),
+
+  automation_pause: z
+    .object({
+      automationId: z.string().min(1).optional(),
+      number: z.number().int().positive().optional(),
+      selector: z.string().min(1).optional()
+    })
+    .strict(),
+
+  automation_resume: z
+    .object({
+      automationId: z.string().min(1).optional(),
+      number: z.number().int().positive().optional(),
+      selector: z.string().min(1).optional()
+    })
+    .strict(),
+
+  automation_delete: z
+    .object({
+      automationId: z.string().min(1).optional(),
+      number: z.number().int().positive().optional(),
+      selector: z.string().min(1).optional()
+    })
     .strict()
 } as const;
 
@@ -332,7 +392,16 @@ export const toolDescriptions: Record<ToolName, string> = {
   notion_append_page:
     "Append content to an existing Notion page by page ID. Use this for follow-ups like add this to that page.",
   notion_update_page_title:
-    "Rename an existing Notion page title by page ID. Use this when the user clearly asks to rename, retitle, or change the title of a Notion page."
+    "Rename an existing Notion page title by page ID. Use this when the user clearly asks to rename, retitle, or change the title of a Notion page.",
+  automation_create:
+    "Create a recurring scheduled automation after user confirmation. Use for requests like every morning, daily, weekdays, weekly, or recurring digests. Normalize time as HH:mm in the user's local timezone.",
+  automation_list: "List the user's active and paused scheduled automations.",
+  automation_pause:
+    "Pause an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector.",
+  automation_resume:
+    "Resume an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector.",
+  automation_delete:
+    "Delete an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector."
 };
 
 export const readOnlyToolNames = [
@@ -353,7 +422,8 @@ export const readOnlyToolNames = [
   "asana_search_tasks",
   "asana_get_task",
   "notion_search_pages",
-  "notion_read_page"
+  "notion_read_page",
+  "automation_list"
 ] as const satisfies readonly ToolName[];
 
 export const writeToolNames = [
@@ -371,7 +441,11 @@ export const writeToolNames = [
   "asana_delete_task",
   "notion_create_page",
   "notion_append_page",
-  "notion_update_page_title"
+  "notion_update_page_title",
+  "automation_create",
+  "automation_pause",
+  "automation_resume",
+  "automation_delete"
 ] as const satisfies readonly ToolName[];
 
 export function isToolName(value: string): value is ToolName {

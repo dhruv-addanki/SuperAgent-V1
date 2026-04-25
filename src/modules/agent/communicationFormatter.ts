@@ -402,6 +402,25 @@ function buildCommunicationEnvelope(
     };
   }
 
+  if (toolName === "automation_list") {
+    const automations = asArray<{ id: string; name: string }>(result.data);
+    return {
+      app: "automation",
+      outcome: automations.length ? "read_result" : "empty",
+      summary: automations.length
+        ? `Found ${automations.length} scheduled ${automations.length === 1 ? "automation" : "automations"}.`
+        : "No active or paused automations found.",
+      nextStep: automations.length
+        ? "You can ask me to pause, resume, or delete one by number."
+        : "You can ask me to create a new scheduled automation.",
+      referenceEntities: automations.slice(0, 10).map((automation) => ({
+        kind: "automation",
+        id: automation.id,
+        name: automation.name
+      }))
+    };
+  }
+
   return {
     app: inferApp(toolName),
     outcome: "read_result",
@@ -417,6 +436,8 @@ function inferApp(toolName: string): string {
   if (toolName.startsWith("gmail_")) return "gmail";
   if (toolName.startsWith("drive_")) return "drive";
   if (toolName.startsWith("docs_")) return "docs";
+  if (toolName.startsWith("notion_")) return "notion";
+  if (toolName.startsWith("automation_")) return "automation";
   if (toolName === "web_search") return "web";
   return "general";
 }
@@ -439,6 +460,9 @@ function writeNextStep(toolName: string): string | undefined {
   }
   if (toolName === "asana_delete_task") {
     return "You can ask me to list the remaining tasks or create a replacement.";
+  }
+  if (toolName.startsWith("automation_")) {
+    return "You can ask me to list automations or change another one.";
   }
   return undefined;
 }
@@ -466,6 +490,18 @@ function referenceEntitiesFromData(toolName: string, data: unknown): ReferenceEn
         kind: "drive_file",
         id: file.id,
         name: file.name
+      }));
+  }
+
+  if (toolName.startsWith("automation_")) {
+    const automations = normalizeToArray<{ id: string; name?: string }>(data);
+    return automations
+      .filter((automation) => automation.id)
+      .slice(0, 10)
+      .map((automation) => ({
+        kind: "automation",
+        id: automation.id,
+        name: automation.name
       }));
   }
 

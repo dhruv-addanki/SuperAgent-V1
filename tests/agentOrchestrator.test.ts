@@ -41,7 +41,9 @@ describe("agent orchestrator", () => {
         findMany: vi.fn(async () => [])
       },
       memoryEntry: {
-        findMany: vi.fn(async () => [])
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
       },
       pendingAction: {
         updateMany: vi.fn(async () => ({ count: 0 })),
@@ -96,7 +98,9 @@ describe("agent orchestrator", () => {
         findMany: vi.fn(async () => [])
       },
       memoryEntry: {
-        findMany: vi.fn(async () => [])
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
       },
       googleAccount: { findUnique: vi.fn(async () => null) },
       asanaAccount: { findUnique: vi.fn(async () => null) },
@@ -153,7 +157,9 @@ describe("agent orchestrator", () => {
         findMany: vi.fn(async () => [{ role: "USER", content: "hi" }])
       },
       memoryEntry: {
-        findMany: vi.fn(async () => [])
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
       },
       googleAccount: { findUnique: vi.fn(async () => null) },
       asanaAccount: { findUnique: vi.fn(async () => null) },
@@ -461,6 +467,79 @@ describe("agent orchestrator", () => {
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "I can help with that.\n\nFor full setup, reply setup to connect Google, Asana, Notion."
+    );
+  });
+
+  it("routes recurring multi-app requests through the model with automation instructions", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage:
+        "Create automation \"Morning brief\"? Reply yes to create it, or cancel.",
+      toolRounds: 0,
+      stoppedForApproval: true
+    });
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          googleEmail: "dhruv@example.com",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          {
+            role: "USER",
+            content:
+              "every morning at 8:00AM summarize my important emails, list my calendar, and make an Asana plan"
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      googleAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      asanaAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      notionAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "every morning at 8:00AM summarize my important emails, list my calendar, and make an Asana plan"
+    });
+
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
+      "use automation_create"
+    );
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
+      "Active app/workflow: multi"
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Create automation \"Morning brief\"? Reply yes to create it, or cancel."
     );
   });
 

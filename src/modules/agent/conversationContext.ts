@@ -167,6 +167,7 @@ function inferActiveAppFromPendingAction(pendingAction: PendingAction | null): s
   if (toolName.startsWith("docs_")) return "docs";
   if (toolName.startsWith("drive_")) return "drive";
   if (toolName.startsWith("notion_")) return "notion";
+  if (toolName.startsWith("automation_")) return "automation";
   if (toolName === "web_search") return "web";
   return null;
 }
@@ -179,6 +180,7 @@ function inferActiveAppFromMemory(entries: PromptMemoryEntry[]): string | null {
     if (entry.key === "recent_google_doc") return "docs";
     if (entry.key === "recent_drive_files") return "drive";
     if (entry.key.startsWith("recent_notion_")) return "notion";
+    if (entry.key === "recent_automations") return "automation";
   }
   return null;
 }
@@ -197,6 +199,7 @@ function memoryBelongsToActiveApp(
   if (activeApp === "docs") return key === "recent_google_doc";
   if (activeApp === "drive") return key === "recent_drive_files" || key === "recent_google_doc";
   if (activeApp === "notion") return key.startsWith("recent_notion_");
+  if (activeApp === "automation") return key === "recent_automations";
   if (activeApp === "web") return false;
   return key.startsWith("recent_");
 }
@@ -439,6 +442,31 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       hints: entities.length
         ? [
             "If the user says that task, the first one, complete it, rename it, or reassign it, use the stored Asana task IDs."
+          ]
+        : []
+    };
+  }
+
+  if (entry.key === "recent_automations") {
+    const automations = Array.isArray(entry.value) ? entry.value : [];
+    const entities = automations
+      .slice(0, 5)
+      .map((automation, index) =>
+        typeof automation === "object" &&
+        automation &&
+        typeof (automation as { id?: unknown }).id === "string"
+          ? `Automation ${index + 1}: ${
+              (automation as { name?: string }).name ?? "Untitled"
+            } (automationId: ${(automation as { id: string }).id})`
+          : null
+      )
+      .filter((value): value is string => Boolean(value));
+    return {
+      entities,
+      resultSummary: entities.length ? `Recent automations: ${entities.length} available.` : undefined,
+      hints: entities.length
+        ? [
+            "If the user says pause it, resume it, delete it, or the first automation, use the stored automation IDs."
           ]
         : []
     };

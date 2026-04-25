@@ -18,6 +18,12 @@ import { GoogleTokenService } from "../google/tokenService";
 import { NotionService } from "../notion/notionService";
 import { NotionTokenService } from "../notion/tokenService";
 import type { NotionPageSummary } from "../notion/notionTypes";
+import {
+  AutomationService,
+  formatAutomationCreated,
+  formatAutomationList,
+  summarizeAutomation
+} from "../automation/automationService";
 import { WebSearchService } from "./webSearchService";
 import {
   createPendingAction,
@@ -129,8 +135,21 @@ function normalizeAsanaWriteInput(
   return normalized;
 }
 
+function normalizeAutomationCreateInput(
+  toolName: ToolName,
+  input: any,
+  defaultTimezone: string
+): any {
+  if (toolName !== "automation_create") return input;
+  return {
+    ...input,
+    timezone: input.timezone || defaultTimezone
+  };
+}
+
 export class ToolExecutor {
   private readonly audit: AuditService;
+  private readonly automationService: AutomationService;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -139,6 +158,7 @@ export class ToolExecutor {
     private readonly notionTokenService: NotionTokenService = new NotionTokenService(prisma)
   ) {
     this.audit = new AuditService(prisma);
+    this.automationService = new AutomationService(prisma);
   }
 
   private async rememberRecentDocument(
@@ -595,6 +615,7 @@ export class ToolExecutor {
     const toolName = toolNameValue;
     let parsedInput = this.validateInput(toolName, rawInput);
     parsedInput = normalizeAsanaWriteInput(toolName, parsedInput, context.latestUserMessage);
+    parsedInput = normalizeAutomationCreateInput(toolName, parsedInput, context.user.timezone);
 
     if (env.READ_ONLY_MODE && isWriteTool(toolName)) {
       await this.audit.log({
@@ -701,6 +722,102 @@ export class ToolExecutor {
         const service = new WebSearchService();
         const data = await service.search(input.query, input.allowedDomains);
         return { ok: true, data };
+      }
+
+      if (toolName.startsWith("automation_")) {
+        if (toolName === "automation_create") {
+          const data = await this.automationService.createAutomation({
+            userId: context.user.id,
+            conversationId: context.conversation.id,
+            name: input.name,
+            prompt: input.prompt,
+            schedule: input.schedule,
+            timezone: input.timezone,
+            now: new Date()
+          });
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "automation_create",
+            toolName,
+            requestPayload: input,
+            responsePayload: summarizeAutomation(data),
+            status: "executed"
+          });
+          return {
+            ok: true,
+            data: summarizeAutomation(data),
+            userMessage: formatAutomationCreated(data),
+            stopAfterTool: true
+          };
+        }
+
+        if (toolName === "automation_list") {
+          const data = await this.automationService.listAutomations(context.user.id);
+          await this.automationService.rememberRecentAutomations(context.user.id, data);
+          return {
+            ok: true,
+            data,
+            userMessage: formatAutomationList(data, context.user.timezone),
+            stopAfterTool: true
+          };
+        }
+
+        if (toolName === "automation_pause") {
+          const data = await this.automationService.pauseAutomation(context.user.id, input);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "automation_pause",
+            toolName,
+            requestPayload: input,
+            responsePayload: summarizeAutomation(data),
+            status: "executed"
+          });
+          return {
+            ok: true,
+            data: summarizeAutomation(data),
+            userMessage: `Paused automation: ${data.name}.`,
+            stopAfterTool: true
+          };
+        }
+
+        if (toolName === "automation_resume") {
+          const data = await this.automationService.resumeAutomation(context.user.id, input);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "automation_resume",
+            toolName,
+            requestPayload: input,
+            responsePayload: summarizeAutomation(data),
+            status: "executed"
+          });
+          return {
+            ok: true,
+            data: summarizeAutomation(data),
+            userMessage: `Resumed automation: ${data.name}. Next run: ${formatForUser(
+              data.nextRunAt,
+              data.timezone
+            )}.`,
+            stopAfterTool: true
+          };
+        }
+
+        if (toolName === "automation_delete") {
+          const data = await this.automationService.deleteAutomation(context.user.id, input);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "automation_delete",
+            toolName,
+            requestPayload: input,
+            responsePayload: summarizeAutomation(data),
+            status: "executed"
+          });
+          return {
+            ok: true,
+            data: summarizeAutomation(data),
+            userMessage: `Deleted automation: ${data.name}.`,
+            stopAfterTool: true
+          };
+        }
       }
 
       if (toolName.startsWith("notion_")) {
@@ -1302,6 +1419,9 @@ function defaultToolFailureMessage(toolName: ToolName): string {
   }
   if (toolName.startsWith("notion_")) {
     return "I couldn't complete that Notion request right now. Try again in a moment.";
+  }
+  if (toolName.startsWith("automation_")) {
+    return "I couldn't complete that automation request right now. Try again in a moment.";
   }
   if (toolName === "web_search") {
     return "I couldn't complete that web lookup right now. Try again in a moment.";

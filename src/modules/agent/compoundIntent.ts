@@ -1,6 +1,23 @@
-export type ReferencedApp = "asana" | "calendar" | "gmail" | "docs" | "drive" | "notion" | "web";
+export type ReferencedApp =
+  | "asana"
+  | "automation"
+  | "calendar"
+  | "gmail"
+  | "docs"
+  | "drive"
+  | "notion"
+  | "web";
 
-const APP_ORDER: ReferencedApp[] = ["web", "calendar", "gmail", "drive", "docs", "notion", "asana"];
+const APP_ORDER: ReferencedApp[] = [
+  "automation",
+  "web",
+  "calendar",
+  "gmail",
+  "drive",
+  "docs",
+  "notion",
+  "asana"
+];
 const ACTION_PATTERNS = [
   /\bshow\b/g,
   /\bcheck\b/g,
@@ -34,6 +51,7 @@ export function detectReferencedApps(text: string): ReferencedApp[] {
   const original = text.trim();
   const apps = new Set<ReferencedApp>();
 
+  if (referencesAutomation(normalized)) apps.add("automation");
   if (referencesWeb(normalized, original)) apps.add("web");
   if (referencesCalendar(normalized)) apps.add("calendar");
   if (referencesGmail(normalized)) apps.add("gmail");
@@ -61,6 +79,16 @@ function referencesWeb(normalized: string, original: string): boolean {
     /\bgoogle (?:it|this|that)\b/.test(normalized) ||
     /\b(stock|stocks|share|shares|market|earnings|ticker)\b/.test(normalized) ||
     (/\b[A-Z]{2,5}\b/.test(original) && /\b(why|up|down|news|today|price|move|moving)\b/.test(normalized))
+  );
+}
+
+function referencesAutomation(normalized: string): boolean {
+  return (
+    /\b(automation|automations|recurring|scheduled digest|daily digest|weekly digest)\b/.test(normalized) ||
+    /\bevery (?:morning|afternoon|evening|day|weekday|week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
+      normalized
+    ) ||
+    /\b(pause|resume|delete|list|show)\b.*\bautomations?\b/.test(normalized)
   );
 }
 

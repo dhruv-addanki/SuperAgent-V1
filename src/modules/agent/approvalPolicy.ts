@@ -3,6 +3,8 @@ import { PendingActionStatus, type PendingAction, type PrismaClient } from "@pri
 import { env } from "../../config/env";
 import { pendingActionExpiry } from "../../lib/time";
 import type { ToolName } from "../../schemas/toolSchemas";
+import { formatAutomationConfirmation } from "../automation/automationService";
+import { isValidTimezone, normalizeAutomationSchedule } from "../automation/schedule";
 
 export type ConfirmationIntent = "SEND" | "CONFIRM" | "CANCEL";
 
@@ -71,6 +73,38 @@ export function getApprovalDecision(
       confirmationKeyword: "SEND",
       confirmationMessage: "Draft ready. Reply send to send it, or tell me what to tweak.",
       reason: "sending_email"
+    };
+  }
+
+  if (toolName === "automation_create") {
+    const input = _input as {
+      name?: string;
+      prompt?: string;
+      schedule?: unknown;
+      timezone?: string;
+    };
+    const timezone =
+      input.timezone && isValidTimezone(input.timezone) ? input.timezone : "the user's timezone";
+    let confirmationMessage = "Create this scheduled automation? Reply yes to create it, or cancel.";
+    try {
+      if (input.prompt && typeof timezone === "string" && timezone !== "the user's timezone") {
+        confirmationMessage = formatAutomationConfirmation({
+          name: input.name,
+          prompt: input.prompt,
+          schedule: normalizeAutomationSchedule(input.schedule),
+          timezone
+        });
+      }
+    } catch {
+      confirmationMessage =
+        "I need a clear recurring schedule with an exact time before I can create that automation.";
+    }
+
+    return {
+      requiresApproval: true,
+      confirmationKeyword: "CONFIRM",
+      confirmationMessage,
+      reason: "scheduled_automation_create"
     };
   }
 
@@ -180,7 +214,8 @@ export function buildPendingActionContext(pendingAction: PendingAction | null): 
   if (
     payload.toolName === "calendar_create_event" ||
     payload.toolName === "calendar_update_event" ||
-    payload.toolName === "calendar_delete_event"
+    payload.toolName === "calendar_delete_event" ||
+    payload.toolName === "automation_create"
   ) {
     return [
       `Pending action: ${payload.toolName}.`,

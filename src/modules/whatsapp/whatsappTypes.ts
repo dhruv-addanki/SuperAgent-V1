@@ -51,6 +51,10 @@ export interface SendTextResult {
   messageId?: string;
 }
 
+export interface SendTemplateResult {
+  messageId?: string;
+}
+
 export interface SendTypingIndicatorResult {
   success: boolean;
 }

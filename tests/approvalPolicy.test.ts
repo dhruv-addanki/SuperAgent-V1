@@ -41,6 +41,24 @@ describe("approval policy", () => {
     ).toBe(true);
   });
 
+  it("requires confirmation before creating an automation", () => {
+    const decision = getApprovalDecision(
+      "automation_create",
+      {
+        name: "Morning brief",
+        prompt: "Summarize important emails and list my calendar.",
+        schedule: { frequency: "daily", time: "08:00" },
+        timezone: "America/New_York"
+      },
+      "every morning at 8 summarize my email and calendar"
+    );
+
+    expect(decision.requiresApproval).toBe(true);
+    expect(decision.confirmationKeyword).toBe("CONFIRM");
+    expect(decision.confirmationMessage).toContain('Create automation "Morning brief"?');
+    expect(decision.confirmationMessage).toContain("Every day at 8:00 AM America/New_York");
+  });
+
   it("allows calendar writes without extra approval", () => {
     expect(
       userClearlyRequestedCalendarWrite("Add drive down to UVA from 1-3:30 on my calendar tomorrow")

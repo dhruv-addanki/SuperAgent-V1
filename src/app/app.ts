@@ -9,6 +9,7 @@ import { createOpenAIClient, type ResponsesClient } from "../lib/openaiClient";
 import { userMessageForError } from "../lib/errors";
 import { prisma as defaultPrisma } from "../modules/db/prisma";
 import { AgentOrchestrator } from "../modules/agent/agentOrchestrator";
+import { AutomationScheduler } from "../modules/automation/automationScheduler";
 import { AsanaOAuthService } from "../modules/asana/asanaOAuthService";
 import { GoogleOAuthService } from "../modules/google/googleOAuthService";
 import { NotionOAuthService } from "../modules/notion/notionOAuthService";
@@ -30,6 +31,7 @@ export interface BuildAppOptions {
   notionOAuthService?: NotionOAuthService;
   queue?: Queue<InboundWhatsAppJobData> | null;
   startWorkers?: boolean;
+  startAutomationScheduler?: boolean;
 }
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -64,6 +66,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     worker = registerWhatsappWorker(agent);
   }
 
+  const automationScheduler =
+    env.AUTOMATION_RUNNER_ENABLED &&
+    options.startAutomationScheduler !== false &&
+    env.NODE_ENV !== "test"
+      ? new AutomationScheduler(prisma, responsesClient, whatsappService)
+      : undefined;
+  automationScheduler?.start();
+
   app.setErrorHandler((error, _request, reply) => {
     const appError = error as { statusCode?: number; name?: string; message?: string };
     logger.error({ error }, "Unhandled request error");
@@ -82,6 +92,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerWhatsAppWebhookRoutes(app, { agent, queue });
 
   app.addHook("onClose", async () => {
+    automationScheduler?.stop();
     await worker?.close();
     await queue?.close();
   });
