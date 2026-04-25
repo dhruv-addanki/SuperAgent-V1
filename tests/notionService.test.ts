@@ -119,6 +119,21 @@ describe("Notion service", () => {
     ]);
   });
 
+  it("creates a blank workspace page when content is omitted", async () => {
+    fetchMock.mockResolvedValueOnce(okResponse(notionPage({ id: "page_1", title: "Blank Page" })));
+
+    const service = new NotionService("access-token");
+    const created = await service.createPage({
+      title: "Blank Page"
+    });
+
+    expect(created.summary).toBe("Created Notion page: Blank Page");
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.parent).toEqual({ type: "workspace", workspace: true });
+    expect(body.children).toEqual([]);
+  });
+
   it("appends content in chunks and retries one 429 response", async () => {
     const content = Array.from({ length: 101 }, (_, index) => `- item ${index + 1}`).join("\n");
     fetchMock

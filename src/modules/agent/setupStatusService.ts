@@ -38,21 +38,21 @@ export class SetupStatusService {
         label: "Google",
         connected: googleAccount === undefined ? true : Boolean(googleAccount),
         detail: user.googleEmail ?? undefined,
-        connectUrl: googleAccount === null ? connectUrl("/auth/google/start", user.whatsappPhone) : undefined
+        connectUrl: connectUrl("/auth/google/start", user.whatsappPhone)
       },
       {
         key: "asana",
         label: "Asana",
         connected: asanaAccount === undefined ? true : Boolean(asanaAccount),
         detail: asanaAccount?.asanaName ?? asanaAccount?.asanaEmail ?? undefined,
-        connectUrl: asanaAccount === null ? connectUrl("/auth/asana/start", user.whatsappPhone) : undefined
+        connectUrl: connectUrl("/auth/asana/start", user.whatsappPhone)
       },
       {
         key: "notion",
         label: "Notion",
         connected: notionAccount === undefined ? true : Boolean(notionAccount),
         detail: notionAccount?.workspaceName ?? undefined,
-        connectUrl: notionAccount === null ? connectUrl("/auth/notion/start", user.whatsappPhone) : undefined
+        connectUrl: connectUrl("/auth/notion/start", user.whatsappPhone)
       }
     ];
 
@@ -76,6 +76,23 @@ export function isSetupStatusRequest(text: string): boolean {
     /^(?:connect|reconnect) (?:my )?(?:accounts|integrations|google|asana|notion)$/.test(normalized) ||
     /^(?:connect|reconnect) (?:my )?.*\b(?:google|asana|notion|accounts|integrations)\b/.test(normalized)
   );
+}
+
+export function integrationLinkRequestForMessage(
+  text: string,
+  status: SetupStatus
+): SetupIntegrationStatus | null {
+  const normalized = normalizeMessage(text);
+  const requestedKey = requestedIntegrationKey(normalized);
+  if (!requestedKey) return null;
+
+  const asksForLink =
+    /\b(link|url|auth|oauth|connect|reconnect|login|sign in|share|page picker|select pages?)\b/.test(
+      normalized
+    );
+  if (!asksForLink) return null;
+
+  return status.integrations.find((integration) => integration.key === requestedKey) ?? null;
 }
 
 export function isGreetingOnly(text: string): boolean {
@@ -127,6 +144,30 @@ export function formatMissingIntegrationForWhatsApp(
     : `Connect ${integration.label} first.`;
 }
 
+export function formatIntegrationLinkForWhatsApp(
+  integration: SetupIntegrationStatus
+): string {
+  if (!integration.connectUrl) return `I don't have a ${integration.label} link available.`;
+
+  if (!integration.connected) {
+    return `Connect ${integration.label} first: ${integration.connectUrl}`;
+  }
+
+  if (integration.key === "notion") {
+    return [
+      `Notion link: ${integration.connectUrl}`,
+      "",
+      "Use it to reconnect Notion or select more pages for the agent."
+    ].join("\n");
+  }
+
+  return [
+    `${integration.label} link: ${integration.connectUrl}`,
+    "",
+    `Use it to reconnect ${integration.label} or update permissions.`
+  ].join("\n");
+}
+
 export function formatSetupHintForWhatsApp(status: SetupStatus): string {
   const missing = status.integrations
     .filter((integration) => !integration.connected)
@@ -152,8 +193,12 @@ export function setupStatusProfileLines(status: SetupStatus, timezone: string): 
     `Connected integrations: ${connected.length ? connected.join(", ") : "None"}`,
     `Missing integrations: ${missing.length ? missing.join(", ") : "None"}`,
     ...status.integrations
-      .filter((integration) => !integration.connected && integration.connectUrl)
-      .map((integration) => `${integration.label} connect link: ${integration.connectUrl}`)
+      .filter((integration) => integration.connectUrl)
+      .map((integration) =>
+        `${integration.label} ${integration.connected ? "reconnect" : "connect"} link: ${
+          integration.connectUrl
+        }`
+      )
   ];
 }
 
@@ -163,6 +208,13 @@ function integrationForApp(app: ReferencedApp): SetupIntegrationKey | null {
   if (app === "calendar" || app === "gmail" || app === "drive" || app === "docs") {
     return "google";
   }
+  return null;
+}
+
+function requestedIntegrationKey(normalized: string): SetupIntegrationKey | null {
+  if (/\bnotion\b/.test(normalized) || /\bpage picker\b/.test(normalized)) return "notion";
+  if (/\basana\b/.test(normalized)) return "asana";
+  if (/\bgoogle|gmail|calendar|drive|docs?\b/.test(normalized)) return "google";
   return null;
 }
 

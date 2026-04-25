@@ -93,7 +93,6 @@ describe("tool schemas", () => {
     expect(
       toolInputSchemas.notion_create_page.parse({
         title: "Meeting Notes",
-        content: "Summary",
         parentPageId: "page_1"
       }).title
     ).toBe("Meeting Notes");

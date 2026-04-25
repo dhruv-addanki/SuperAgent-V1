@@ -36,8 +36,10 @@ import {
 } from "./conversationContext";
 import {
   formatMissingIntegrationForWhatsApp,
+  formatIntegrationLinkForWhatsApp,
   formatSetupHintForWhatsApp,
   formatSetupStatusForWhatsApp,
+  integrationLinkRequestForMessage,
   isGreetingOnly,
   isSetupStatusRequest,
   missingIntegrationsForRequest,
@@ -166,6 +168,10 @@ export class AgentOrchestrator {
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
       const setupStatus = await this.setupStatusService.getStatus(user);
       const setupRequest = isSetupStatusRequest(preparedInput.text);
+      const integrationLinkRequest = integrationLinkRequestForMessage(
+        preparedInput.text,
+        setupStatus
+      );
       const firstInteraction = isFirstInteraction(history);
       const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
       const appendSetupHint =
@@ -184,6 +190,13 @@ export class AgentOrchestrator {
           allowSetupHint && appendSetupHint ? appendSetupHintToMessage(message, setupStatus) : message
         );
       };
+
+      if (integrationLinkRequest) {
+        await replyToUser(formatIntegrationLinkForWhatsApp(integrationLinkRequest), {
+          allowSetupHint: false
+        });
+        return;
+      }
 
       if (
         setupRequest ||

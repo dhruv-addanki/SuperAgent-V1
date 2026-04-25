@@ -276,7 +276,7 @@ export const toolInputSchemas = {
   notion_create_page: z
     .object({
       title: z.string().min(1),
-      content: z.string().min(1),
+      content: z.string().min(1).optional(),
       parentPageId: z.string().min(1).optional()
     })
     .strict(),
@@ -388,7 +388,7 @@ export const toolDescriptions: Record<ToolName, string> = {
   notion_read_page:
     "Read a Notion page by page ID, including bounded text from its child blocks.",
   notion_create_page:
-    "Create a Notion page. Include parentPageId when the user selected a parent page or recent Notion context provides one.",
+    "Create a Notion page, optionally with content. Omit parentPageId for workspace-level pages; include parentPageId only when the user selected a specific parent page.",
   notion_append_page:
     "Append content to an existing Notion page by page ID. Use this for follow-ups like add this to that page.",
   notion_update_page_title:

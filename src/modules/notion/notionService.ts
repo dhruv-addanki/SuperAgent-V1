@@ -53,10 +53,10 @@ export class NotionService {
 
   async createPage(input: {
     title: string;
-    content: string;
+    content?: string;
     parentPageId?: string;
   }): Promise<NotionWriteSummary> {
-    const blocks = textToBlocks(input.content);
+    const blocks = input.content?.trim() ? textToBlocks(input.content) : [];
     const firstChunk = blocks.slice(0, MAX_CHILDREN_PER_REQUEST);
     const remaining = blocks.slice(MAX_CHILDREN_PER_REQUEST);
 

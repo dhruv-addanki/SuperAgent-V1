@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  formatIntegrationLinkForWhatsApp,
   formatSetupStatusForWhatsApp,
+  integrationLinkRequestForMessage,
   missingIntegrationsForRequest,
   SetupStatusService,
   setupStatusProfileLines
@@ -77,8 +79,19 @@ describe("setup status service", () => {
     expect(formatted).toContain("- Asana: connected (Dhruv Addanki)");
     expect(formatted).toContain("- Notion: connected (Dhruv HQ)");
     expect(formatted).not.toContain("Connect:");
+    expect(status.integrations.find((integration) => integration.key === "notion")?.connectUrl).toContain(
+      "/auth/notion/start?phone=%2B15555550100"
+    );
     expect(setupStatusProfileLines(status, "America/New_York")).toContain(
       "Connected integrations: Google (dhruv@gmail.com), Asana (Dhruv Addanki), Notion (Dhruv HQ)"
     );
+    expect(
+      integrationLinkRequestForMessage("send notion link", status)
+    ).toEqual(expect.objectContaining({ key: "notion" }));
+    expect(
+      formatIntegrationLinkForWhatsApp(
+        status.integrations.find((integration) => integration.key === "notion")!
+      )
+    ).toContain("Use it to reconnect Notion or select more pages");
   });
 });
