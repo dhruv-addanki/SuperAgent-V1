@@ -15,6 +15,7 @@ import { WhatsAppMediaService } from "../whatsapp/whatsappMediaService";
 import type { WhatsAppInboundMessagePayload } from "../whatsapp/whatsappTypes";
 import { AsanaTokenService } from "../asana/tokenService";
 import { GoogleTokenService } from "../google/tokenService";
+import { NotionTokenService } from "../notion/tokenService";
 import { LongTermMemory } from "../memory/longTermMemory";
 import { ShortTermMemory } from "../memory/shortTermMemory";
 import {
@@ -89,7 +90,13 @@ export class AgentOrchestrator {
   ) {
     const googleTokenService = new GoogleTokenService(prisma);
     const asanaTokenService = new AsanaTokenService(prisma);
-    this.toolExecutor = new ToolExecutor(prisma, googleTokenService, asanaTokenService);
+    const notionTokenService = new NotionTokenService(prisma);
+    this.toolExecutor = new ToolExecutor(
+      prisma,
+      googleTokenService,
+      asanaTokenService,
+      notionTokenService
+    );
     this.shortTermMemory = new ShortTermMemory(prisma);
     this.longTermMemory = new LongTermMemory(prisma);
     this.whatsappMediaService = options.whatsappMediaService ?? new WhatsAppMediaService();

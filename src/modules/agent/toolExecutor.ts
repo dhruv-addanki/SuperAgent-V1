@@ -15,6 +15,9 @@ import { DocsService } from "../google/docsService";
 import { DriveService } from "../google/driveService";
 import { GmailService } from "../google/gmailService";
 import { GoogleTokenService } from "../google/tokenService";
+import { NotionService } from "../notion/notionService";
+import { NotionTokenService } from "../notion/tokenService";
+import type { NotionPageSummary } from "../notion/notionTypes";
 import { WebSearchService } from "./webSearchService";
 import {
   createPendingAction,
@@ -132,7 +135,8 @@ export class ToolExecutor {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly googleTokenService: GoogleTokenService,
-    private readonly asanaTokenService: AsanaTokenService
+    private readonly asanaTokenService: AsanaTokenService,
+    private readonly notionTokenService: NotionTokenService = new NotionTokenService(prisma)
   ) {
     this.audit = new AuditService(prisma);
   }
@@ -298,6 +302,72 @@ export class ToolExecutor {
         userId,
         key: "recent_drive_files",
         value: normalizedFiles,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentNotionPages(
+    userId: string,
+    pages: NotionPageSummary[]
+  ): Promise<void> {
+    const normalizedPages = pages
+      .filter((page) => page.pageId)
+      .slice(0, 10)
+      .map((page) => ({
+        pageId: page.pageId,
+        title: page.title,
+        url: page.url,
+        lastEditedTime: page.lastEditedTime,
+        parentType: page.parentType,
+        parentId: page.parentId
+      }));
+
+    if (!normalizedPages.length) return;
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_notion_pages" } },
+      update: {
+        value: normalizedPages,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_notion_pages",
+        value: normalizedPages,
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberRecentNotionPage(
+    userId: string,
+    page: NotionPageSummary
+  ): Promise<void> {
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "recent_notion_page" } },
+      update: {
+        value: {
+          pageId: page.pageId,
+          title: page.title,
+          url: page.url,
+          lastEditedTime: page.lastEditedTime,
+          parentType: page.parentType,
+          parentId: page.parentId
+        },
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "recent_notion_page",
+        value: {
+          pageId: page.pageId,
+          title: page.title,
+          url: page.url,
+          lastEditedTime: page.lastEditedTime,
+          parentType: page.parentType,
+          parentId: page.parentId
+        },
         confidence: 1
       }
     });
@@ -631,6 +701,54 @@ export class ToolExecutor {
         const service = new WebSearchService();
         const data = await service.search(input.query, input.allowedDomains);
         return { ok: true, data };
+      }
+
+      if (toolName.startsWith("notion_")) {
+        const accessToken = await this.notionTokenService.getAccessTokenForUser(context.user);
+        const service = new NotionService(accessToken);
+
+        if (toolName === "notion_search_pages") {
+          const data = await service.searchPages(input.query, input.limit);
+          await this.rememberRecentNotionPages(context.user.id, data);
+          if (data.length === 1) {
+            await this.rememberRecentNotionPage(context.user.id, data[0]!);
+          }
+          return { ok: true, data };
+        }
+
+        if (toolName === "notion_read_page") {
+          const data = await service.readPage(input.pageId);
+          await this.rememberRecentNotionPage(context.user.id, data);
+          return { ok: true, data };
+        }
+
+        if (toolName === "notion_create_page") {
+          const data = await service.createPage(input);
+          await this.rememberRecentNotionPage(context.user.id, data);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "notion_create_page",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: "executed"
+          });
+          return { ok: true, data, userMessage: `Created: ${data.title}${data.url ? `\n${data.url}` : ""}` };
+        }
+
+        if (toolName === "notion_append_page") {
+          const data = await service.appendToPage(input);
+          await this.rememberRecentNotionPage(context.user.id, data);
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "notion_append_page",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: "executed"
+          });
+          return { ok: true, data, userMessage: `Updated: ${data.title}${data.url ? `\n${data.url}` : ""}` };
+        }
       }
 
       if (toolName.startsWith("asana_")) {
@@ -1155,6 +1273,9 @@ function defaultToolFailureMessage(toolName: ToolName): string {
   }
   if (toolName.startsWith("docs_")) {
     return "I couldn't complete that Google Doc request right now. Try again in a moment.";
+  }
+  if (toolName.startsWith("notion_")) {
+    return "I couldn't complete that Notion request right now. Try again in a moment.";
   }
   if (toolName === "web_search") {
     return "I couldn't complete that web lookup right now. Try again in a moment.";

@@ -11,12 +11,14 @@ import { prisma as defaultPrisma } from "../modules/db/prisma";
 import { AgentOrchestrator } from "../modules/agent/agentOrchestrator";
 import { AsanaOAuthService } from "../modules/asana/asanaOAuthService";
 import { GoogleOAuthService } from "../modules/google/googleOAuthService";
+import { NotionOAuthService } from "../modules/notion/notionOAuthService";
 import { WhatsAppService } from "../modules/whatsapp/whatsappService";
 import { createWhatsAppInboundQueue, type InboundWhatsAppJobData } from "../modules/queue/queue";
 import { registerWhatsappWorker } from "../modules/queue/jobs";
 import { registerHealthRoutes } from "../routes/health";
 import { registerAsanaAuthRoutes } from "../routes/authAsana";
 import { registerGoogleAuthRoutes } from "../routes/authGoogle";
+import { registerNotionAuthRoutes } from "../routes/authNotion";
 import { registerWhatsAppWebhookRoutes } from "../routes/whatsappWebhook";
 
 export interface BuildAppOptions {
@@ -25,6 +27,7 @@ export interface BuildAppOptions {
   whatsappService?: WhatsAppService;
   googleOAuthService?: GoogleOAuthService;
   asanaOAuthService?: AsanaOAuthService;
+  notionOAuthService?: NotionOAuthService;
   queue?: Queue<InboundWhatsAppJobData> | null;
   startWorkers?: boolean;
 }
@@ -47,6 +50,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const agent = new AgentOrchestrator(prisma, responsesClient, whatsappService);
   const googleOAuthService = options.googleOAuthService ?? new GoogleOAuthService(prisma);
   const asanaOAuthService = options.asanaOAuthService ?? new AsanaOAuthService(prisma);
+  const notionOAuthService = options.notionOAuthService ?? new NotionOAuthService(prisma);
   const queue =
     options.queue === null
       ? undefined
@@ -74,6 +78,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerHealthRoutes(app);
   await registerGoogleAuthRoutes(app, googleOAuthService);
   await registerAsanaAuthRoutes(app, asanaOAuthService);
+  await registerNotionAuthRoutes(app, notionOAuthService);
   await registerWhatsAppWebhookRoutes(app, { agent, queue });
 
   app.addHook("onClose", async () => {

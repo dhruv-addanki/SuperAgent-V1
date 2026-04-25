@@ -19,3 +19,7 @@ process.env.ASANA_CLIENT_ID = process.env.ASANA_CLIENT_ID ?? "asana-client";
 process.env.ASANA_CLIENT_SECRET = process.env.ASANA_CLIENT_SECRET ?? "asana-secret";
 process.env.ASANA_REDIRECT_URI =
   process.env.ASANA_REDIRECT_URI ?? "http://localhost:3000/auth/asana/callback";
+process.env.NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID ?? "notion-client";
+process.env.NOTION_CLIENT_SECRET = process.env.NOTION_CLIENT_SECRET ?? "notion-secret";
+process.env.NOTION_REDIRECT_URI =
+  process.env.NOTION_REDIRECT_URI ?? "http://localhost:3000/auth/notion/callback";

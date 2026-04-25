@@ -47,6 +47,9 @@ const envSchema = z
     ASANA_CLIENT_ID: z.string().min(1).default("dev-asana-client-id"),
     ASANA_CLIENT_SECRET: z.string().min(1).default("dev-asana-client-secret"),
     ASANA_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/asana/callback"),
+    NOTION_CLIENT_ID: z.string().min(1).default("dev-notion-client-id"),
+    NOTION_CLIENT_SECRET: z.string().min(1).default("dev-notion-client-secret"),
+    NOTION_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/notion/callback"),
     READ_ONLY_MODE: booleanFromString,
 
     ENCRYPTION_KEY: z.string().min(1).default("dev-only-change-me"),
@@ -67,6 +70,9 @@ const envSchema = z
       "WHATSAPP_PHONE_NUMBER_ID",
       "GOOGLE_CLIENT_ID",
       "GOOGLE_CLIENT_SECRET",
+      "NOTION_CLIENT_ID",
+      "NOTION_CLIENT_SECRET",
+      "NOTION_REDIRECT_URI",
       "ENCRYPTION_KEY"
     ];
 
@@ -79,6 +85,14 @@ const envSchema = z
           message: `${key} must be set to a production value`
         });
       }
+    }
+
+    if (value.NOTION_REDIRECT_URI.includes("localhost")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["NOTION_REDIRECT_URI"],
+        message: "NOTION_REDIRECT_URI must be set to a public production callback URL"
+      });
     }
   });
 

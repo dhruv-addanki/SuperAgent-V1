@@ -124,6 +124,7 @@ function inferActiveAppFromPendingAction(pendingAction: PendingAction | null): s
   if (toolName.startsWith("gmail_")) return "gmail";
   if (toolName.startsWith("docs_")) return "docs";
   if (toolName.startsWith("drive_")) return "drive";
+  if (toolName.startsWith("notion_")) return "notion";
   if (toolName === "web_search") return "web";
   return null;
 }
@@ -135,6 +136,7 @@ function inferActiveAppFromMemory(entries: PromptMemoryEntry[]): string | null {
     if (entry.key === "recent_gmail_threads") return "gmail";
     if (entry.key === "recent_google_doc") return "docs";
     if (entry.key === "recent_drive_files") return "drive";
+    if (entry.key.startsWith("recent_notion_")) return "notion";
   }
   return null;
 }
@@ -152,6 +154,7 @@ function memoryBelongsToActiveApp(
   if (activeApp === "gmail") return key === "recent_gmail_threads";
   if (activeApp === "docs") return key === "recent_google_doc";
   if (activeApp === "drive") return key === "recent_drive_files" || key === "recent_google_doc";
+  if (activeApp === "notion") return key.startsWith("recent_notion_");
   if (activeApp === "web") return false;
   return key.startsWith("recent_");
 }
@@ -272,6 +275,47 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       hints: entities.length
         ? [
             "If the user says same file, that file, or delete the first one, use the stored Drive file IDs."
+          ]
+        : []
+    };
+  }
+
+  if (entry.key === "recent_notion_page") {
+    const value = entry.value as {
+      pageId?: string;
+      title?: string;
+      url?: string;
+    };
+    if (!value?.pageId) return { entities: [], hints: [] };
+    return {
+      entities: [
+        `Notion page: ${value.title ?? "Untitled"} (pageId: ${value.pageId})`
+      ],
+      resultSummary: `Current Notion page: ${value.title ?? "Untitled"}.`,
+      hints: [
+        "If the user says same Notion page, that page, append to it, or add this there, use the stored Notion page ID."
+      ]
+    };
+  }
+
+  if (entry.key === "recent_notion_pages") {
+    const pages = Array.isArray(entry.value) ? entry.value : [];
+    const entities = pages
+      .slice(0, 5)
+      .map((page) =>
+        typeof page === "object" && page && typeof (page as { pageId?: unknown }).pageId === "string"
+          ? `Notion page: ${(page as { title?: string }).title ?? "Untitled"} (pageId: ${
+              (page as { pageId: string }).pageId
+            })`
+          : null
+      )
+      .filter((value): value is string => Boolean(value));
+    return {
+      entities,
+      resultSummary: entities.length ? `Recent Notion pages: ${entities.length} available.` : undefined,
+      hints: entities.length
+        ? [
+            "If the user refers to the first Notion page, that page, or one of the listed pages, use the stored Notion page IDs."
           ]
         : []
     };

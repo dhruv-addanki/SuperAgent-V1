@@ -38,6 +38,7 @@ model User {
 
   googleAccount GoogleAccount?
   asanaAccount  AsanaAccount?
+  notionAccount NotionAccount?
   conversations Conversation[]
   memoryEntries MemoryEntry[]
   pendingActions PendingAction[]
@@ -69,6 +70,24 @@ model AsanaAccount {
   scope        String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model NotionAccount {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  workspaceId   String?
+  workspaceName String?
+  workspaceIcon String?
+  botId         String?
+  ownerType     String?
+  accessToken   String
+  refreshToken  String?
+  expiryDate    DateTime?
+  scope         String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

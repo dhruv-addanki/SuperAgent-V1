@@ -90,6 +90,7 @@ The model never calls external APIs directly. It only emits tool calls. The back
 - ngrok for local webhook testing
 - Meta developer app with WhatsApp Cloud API enabled
 - Google Cloud project with OAuth consent screen and credentials
+- Notion public integration with OAuth configured
 - OpenAI API key with access to the configured Responses API model
 
 ## Local Setup
@@ -151,6 +152,12 @@ Asana:
 - `ASANA_CLIENT_ID`: OAuth client ID.
 - `ASANA_CLIENT_SECRET`: OAuth client secret.
 - `ASANA_REDIRECT_URI`: Usually `http://localhost:3000/auth/asana/callback` for local dev.
+
+Notion:
+
+- `NOTION_CLIENT_ID`: OAuth client ID for a Notion public integration.
+- `NOTION_CLIENT_SECRET`: OAuth client secret.
+- `NOTION_REDIRECT_URI`: Usually `http://localhost:3000/auth/notion/callback` for local dev.
 
 Write control:
 
@@ -218,6 +225,20 @@ The app currently requests these Asana scopes:
 
 - `attachments:read`
 - `attachments:write`
+
+## Notion OAuth Setup
+
+1. Create a Notion public integration.
+2. Enable OAuth and add the redirect URI from `.env`, for example:
+
+```text
+http://localhost:3000/auth/notion/callback
+```
+
+3. Enable at least Read Content and Insert Content capabilities.
+4. Put `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, and `NOTION_REDIRECT_URI` in `.env`.
+
+The assistant replies with a Notion connect link when a Notion tool is used without a connected Notion account.
 - `attachments:delete`
 - `custom_fields:read`
 - `custom_fields:write`
@@ -288,6 +309,8 @@ Read tools:
 - `asana_list_my_tasks`
 - `asana_search_tasks`
 - `asana_get_task`
+- `notion_search_pages`
+- `notion_read_page`
 
 Write tools:
 
@@ -298,6 +321,8 @@ Write tools:
 - `asana_create_task`
 - `asana_update_task`
 - `asana_delete_task`
+- `notion_create_page`
+- `notion_append_page`
 
 Read-only mode removes write tools from the OpenAI tool list and blocks write execution if called unexpectedly.
 

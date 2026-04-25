@@ -143,4 +143,40 @@ describe("conversation context", () => {
     expect(context.activeEntities).toEqual([]);
     expect(context.recentResults).toEqual([]);
   });
+
+  it("resolves Notion page context for follow-up appends", () => {
+    const context = buildConversationContext({
+      latestUserMessage: "append this to the same Notion page",
+      memoryEntries: [
+        {
+          key: "recent_notion_page",
+          value: {
+            pageId: "page_1",
+            title: "Launch Notes",
+            url: "https://notion.so/page_1"
+          },
+          updatedAt: new Date()
+        },
+        {
+          key: "recent_asana_tasks",
+          value: [
+            {
+              taskGid: "task_1",
+              name: "Unrelated"
+            }
+          ],
+          updatedAt: new Date()
+        }
+      ],
+      pendingAction: null,
+      pendingActionSummary: "No pending actions."
+    });
+
+    expect(context.activeApp).toBe("notion");
+    expect(context.activeEntities).toEqual([
+      "Notion page: Launch Notes (pageId: page_1)"
+    ]);
+    expect(context.recentResults).toEqual(["Current Notion page: Launch Notes."]);
+    expect(context.communicationHints[0]).toContain("same Notion page");
+  });
 });

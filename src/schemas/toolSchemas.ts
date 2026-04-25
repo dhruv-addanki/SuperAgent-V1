@@ -233,6 +233,34 @@ export const toolInputSchemas = {
     .object({
       taskGid: z.string().min(1)
     })
+    .strict(),
+
+  notion_search_pages: z
+    .object({
+      query: z.string().min(1),
+      limit: z.number().int().positive().max(25).optional()
+    })
+    .strict(),
+
+  notion_read_page: z
+    .object({
+      pageId: z.string().min(1)
+    })
+    .strict(),
+
+  notion_create_page: z
+    .object({
+      title: z.string().min(1),
+      content: z.string().min(1),
+      parentPageId: z.string().min(1).optional()
+    })
+    .strict(),
+
+  notion_append_page: z
+    .object({
+      pageId: z.string().min(1),
+      content: z.string().min(1)
+    })
     .strict()
 } as const;
 
@@ -287,7 +315,15 @@ export const toolDescriptions: Record<ToolName, string> = {
   asana_update_task:
     "Update an existing Asana task. Use this to rename, reassign, change dates, or mark a task complete or incomplete. Provide only one of dueOn or dueAt. To remove the due date, clear the existing due field instead of setting both.",
   asana_delete_task:
-    "Delete an existing Asana task by task GID. Use this only when the user clearly asks to delete or remove the task."
+    "Delete an existing Asana task by task GID. Use this only when the user clearly asks to delete or remove the task.",
+  notion_search_pages:
+    "Search Notion pages by text query. Use this to find Notion pages before reading or appending to them.",
+  notion_read_page:
+    "Read a Notion page by page ID, including bounded text from its child blocks.",
+  notion_create_page:
+    "Create a Notion page. Include parentPageId when the user selected a parent page or recent Notion context provides one.",
+  notion_append_page:
+    "Append content to an existing Notion page by page ID. Use this for follow-ups like add this to that page."
 };
 
 export const readOnlyToolNames = [
@@ -306,7 +342,9 @@ export const readOnlyToolNames = [
   "asana_list_my_tasks",
   "asana_list_project_tasks",
   "asana_search_tasks",
-  "asana_get_task"
+  "asana_get_task",
+  "notion_search_pages",
+  "notion_read_page"
 ] as const satisfies readonly ToolName[];
 
 export const writeToolNames = [
@@ -321,7 +359,9 @@ export const writeToolNames = [
   "docs_create_document",
   "asana_create_task",
   "asana_update_task",
-  "asana_delete_task"
+  "asana_delete_task",
+  "notion_create_page",
+  "notion_append_page"
 ] as const satisfies readonly ToolName[];
 
 export function isToolName(value: string): value is ToolName {

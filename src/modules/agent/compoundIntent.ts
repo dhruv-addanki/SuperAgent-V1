@@ -1,6 +1,6 @@
-export type ReferencedApp = "asana" | "calendar" | "gmail" | "docs" | "drive" | "web";
+export type ReferencedApp = "asana" | "calendar" | "gmail" | "docs" | "drive" | "notion" | "web";
 
-const APP_ORDER: ReferencedApp[] = ["web", "calendar", "gmail", "drive", "docs", "asana"];
+const APP_ORDER: ReferencedApp[] = ["web", "calendar", "gmail", "drive", "docs", "notion", "asana"];
 const ACTION_PATTERNS = [
   /\bshow\b/g,
   /\bcheck\b/g,
@@ -39,6 +39,7 @@ export function detectReferencedApps(text: string): ReferencedApp[] {
   if (referencesGmail(normalized)) apps.add("gmail");
   if (referencesDrive(normalized)) apps.add("drive");
   if (referencesDocs(normalized)) apps.add("docs");
+  if (referencesNotion(normalized)) apps.add("notion");
   if (referencesAsana(normalized)) apps.add("asana");
 
   return APP_ORDER.filter((app) => apps.has(app));
@@ -79,7 +80,11 @@ function referencesDrive(normalized: string): boolean {
 }
 
 function referencesDocs(normalized: string): boolean {
-  return /\b(google doc|doc|docs|document|append)\b/.test(normalized);
+  return /\b(google doc|doc|docs|document)\b/.test(normalized);
+}
+
+function referencesNotion(normalized: string): boolean {
+  return /\b(notion|notion page|notion doc|workspace page)\b/.test(normalized);
 }
 
 function referencesAsana(normalized: string): boolean {

@@ -662,6 +662,67 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("routes Notion-read plus calendar-write requests through the response loop", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "Notion page found and reminder booked",
+      toolRounds: 1
+    });
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Find my Notion page about Scanis and add a 3 PM calendar reminder"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
+      "Active app/workflow: multi"
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Notion page found and reminder booked"
+    );
+  });
+
   it("routes stock follow-ups through the response loop after calendar text mentions Asana", async () => {
     runResponseLoopMock.mockResolvedValue({
       assistantMessage: "NVDA market summary",

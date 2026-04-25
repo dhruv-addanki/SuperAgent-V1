@@ -17,9 +17,14 @@ module.exports = [
         process: "readonly",
         Buffer: "readonly",
         setImmediate: "readonly",
+        setTimeout: "readonly",
         fetch: "readonly",
         require: "readonly",
-        URL: "readonly"
+        URL: "readonly",
+        URLSearchParams: "readonly",
+        Headers: "readonly",
+        RequestInit: "readonly",
+        Response: "readonly"
       }
     },
     plugins: {
