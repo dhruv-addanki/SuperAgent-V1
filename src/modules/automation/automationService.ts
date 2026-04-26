@@ -323,18 +323,28 @@ export class AutomationService {
 
 export function formatAutomationList(
   automations: AutomationSummary[],
-  timezone: string
+  timezone: string,
+  options: { now?: Date; runnerEnabled?: boolean } = {}
 ): string {
   if (!automations.length) return "You don't have any active or paused automations.";
 
+  const now = options.now ?? new Date();
   return [
     "Automations:",
     ...automations.map((automation, index) => {
       const status = automation.status === AutomationStatus.PAUSED ? "paused" : "active";
+      const overdue =
+        automation.status === AutomationStatus.ACTIVE &&
+        automation.nextRunAt.getTime() <= now.getTime();
+      const overdueLabel = overdue
+        ? options.runnerEnabled === false
+          ? " - overdue; automation runner is disabled"
+          : " - overdue; waiting for runner"
+        : "";
       return `${index + 1}. ${automation.name} - ${status} - ${automation.scheduleLabel} - next ${formatForUser(
         automation.nextRunAt,
         timezone
-      )}`;
+      )}${overdueLabel}`;
     })
   ].join("\n");
 }

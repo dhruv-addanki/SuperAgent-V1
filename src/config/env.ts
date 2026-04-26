@@ -10,6 +10,15 @@ const booleanFromString = z
     return ["1", "true", "yes", "on"].includes(value.toLowerCase());
   });
 
+const optionalBooleanFromString = z
+  .union([z.boolean(), z.string()])
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    if (typeof value === "boolean") return value;
+    return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+  });
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -62,7 +71,7 @@ const envSchema = z
     MAX_TOOL_ROUNDS: z.coerce.number().int().positive().max(10).default(3),
     RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(30),
     USE_REDIS_QUEUE: booleanFromString,
-    AUTOMATION_RUNNER_ENABLED: booleanFromString,
+    AUTOMATION_RUNNER_ENABLED: optionalBooleanFromString,
     AUTOMATION_POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
     AUTOMATION_BATCH_SIZE: z.coerce.number().int().positive().max(50).default(10)
   })
@@ -100,21 +109,18 @@ const envSchema = z
         message: "NOTION_REDIRECT_URI must be set to a public production callback URL"
       });
     }
-
-    if (value.AUTOMATION_RUNNER_ENABLED && !value.WHATSAPP_AUTOMATION_TEMPLATE_NAME) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["WHATSAPP_AUTOMATION_TEMPLATE_NAME"],
-        message:
-          "WHATSAPP_AUTOMATION_TEMPLATE_NAME must be set when scheduled automations are enabled in production"
-      });
-    }
   });
 
 const parsedEnv = envSchema.parse(process.env);
 
+const automationRunnerEnabled =
+  parsedEnv.AUTOMATION_RUNNER_ENABLED !== undefined
+    ? parsedEnv.AUTOMATION_RUNNER_ENABLED
+    : parsedEnv.NODE_ENV === "production";
+
 export const env = {
   ...parsedEnv,
+  AUTOMATION_RUNNER_ENABLED: automationRunnerEnabled,
   READ_ONLY_MODE: parsedEnv.READ_ONLY_MODE || parsedEnv.GOOGLE_READ_ONLY_MODE,
   GOOGLE_READ_ONLY_MODE: parsedEnv.GOOGLE_READ_ONLY_MODE || parsedEnv.READ_ONLY_MODE
 } as const;

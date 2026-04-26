@@ -798,7 +798,9 @@ export class ToolExecutor {
           return {
             ok: true,
             data,
-            userMessage: formatAutomationList(data, context.user.timezone),
+            userMessage: formatAutomationList(data, context.user.timezone, {
+              runnerEnabled: env.AUTOMATION_RUNNER_ENABLED
+            }),
             stopAfterTool: true
           };
         }

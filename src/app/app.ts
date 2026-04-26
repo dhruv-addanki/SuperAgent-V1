@@ -66,13 +66,30 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     worker = registerWhatsappWorker(agent);
   }
 
-  const automationScheduler =
+  const automationRunnerEnabled =
     env.AUTOMATION_RUNNER_ENABLED &&
     options.startAutomationScheduler !== false &&
-    env.NODE_ENV !== "test"
-      ? new AutomationScheduler(prisma, responsesClient, whatsappService)
-      : undefined;
-  automationScheduler?.start();
+    env.NODE_ENV !== "test";
+  let automationScheduler: AutomationScheduler | undefined;
+  if (automationRunnerEnabled) {
+    logger.info(
+      {
+        pollIntervalSeconds: env.AUTOMATION_POLL_INTERVAL_SECONDS,
+        batchSize: env.AUTOMATION_BATCH_SIZE,
+        hasWhatsAppTemplate: Boolean(env.WHATSAPP_AUTOMATION_TEMPLATE_NAME)
+      },
+      "Automation runner enabled"
+    );
+    if (!env.WHATSAPP_AUTOMATION_TEMPLATE_NAME) {
+      logger.warn(
+        "WhatsApp automation template is not configured; scheduled messages outside the 24-hour WhatsApp window will fail delivery"
+      );
+    }
+    automationScheduler = new AutomationScheduler(prisma, responsesClient, whatsappService);
+    automationScheduler.start();
+  } else if (env.NODE_ENV === "production") {
+    logger.warn("Automation runner disabled; scheduled automations will not run");
+  }
 
   app.setErrorHandler((error, _request, reply) => {
     const appError = error as { statusCode?: number; name?: string; message?: string };
