@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const runResponseLoopMock = vi.fn();
 
 vi.mock("../src/modules/agent/responseLoop", () => ({
+  extractOutputText: (response: any) => response.output_text?.trim() ?? "",
   runResponseLoop: (...args: any[]) => runResponseLoopMock(...args)
 }));
 
@@ -1028,7 +1029,8 @@ describe("agent orchestrator", () => {
         mediaId: "audio-id",
         mimeType: "audio/ogg",
         sha256: "hash"
-      }))
+      })),
+      downloadImage: vi.fn()
     };
     const audioTranscriptionService = {
       transcribe: vi.fn(async () => ({
@@ -1136,7 +1138,8 @@ describe("agent orchestrator", () => {
         filename: "audio-id.ogg",
         mediaId: "audio-id",
         mimeType: "audio/ogg"
-      }))
+      })),
+      downloadImage: vi.fn()
     };
     const audioTranscriptionService = {
       transcribe: vi.fn(async () => {
@@ -1170,6 +1173,355 @@ describe("agent orchestrator", () => {
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "I didn't catch any speech in that voice message."
+    );
+  });
+
+  it("routes image messages through the model with image input and stores text-only metadata", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "The screenshot says the invoice is due Friday.",
+      toolRounds: 0
+    });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [{ role: "USER", content: "what does this say?" }])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_image_context",
+            value: {
+              summary:
+                "Visible text: invoice due Friday. Visual context: invoice screenshot. Likely user intent: extract the due date.",
+              caption: "what does this say?"
+            },
+            updatedAt: new Date()
+          }
+        ]),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const responsesClient = {
+      createResponse: vi.fn(async () => ({
+        output_text:
+          "Visible text: invoice due Friday. Visual context: invoice screenshot. Likely user intent: extract the due date."
+      }))
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const whatsappMediaService = {
+      downloadAudio: vi.fn(),
+      downloadImage: vi.fn(async () => ({
+        buffer: Buffer.from([1, 2, 3]),
+        filename: "image-id.png",
+        mediaId: "image-id",
+        mimeType: "image/png",
+        sha256: "image-hash"
+      }))
+    };
+
+    const orchestrator = new AgentOrchestrator(prisma, responsesClient, whatsappService, {
+      whatsappMediaService,
+      audioTranscriptionService: { transcribe: vi.fn() }
+    });
+
+    await orchestrator.processInboundWhatsAppMessage({
+      kind: "image",
+      from: "+15555550100",
+      messageId: "wamid.image",
+      mediaId: "image-id",
+      mimeType: "image/png",
+      sha256: "image-hash",
+      caption: "what does this say?",
+      raw: { type: "image" }
+    });
+
+    expect(whatsappMediaService.downloadImage).toHaveBeenCalledWith({
+      mediaId: "image-id",
+      mimeType: "image/png",
+      sha256: "image-hash"
+    });
+    expect(prisma.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          role: "USER",
+          senderPhone: "+15555550100",
+          content: "what does this say?",
+          rawPayload: expect.objectContaining({
+            kind: "image",
+            mediaId: "image-id",
+            downloadedMimeType: "image/png",
+            caption: "what does this say?"
+          })
+        })
+      })
+    );
+    const persistedRawPayload = prisma.message.create.mock.calls[0][0].data.rawPayload;
+    expect(JSON.stringify(persistedRawPayload)).not.toContain("data:image");
+    expect(prisma.memoryEntry.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "recent_image_context" } },
+        create: expect.objectContaining({
+          key: "recent_image_context",
+          value: expect.objectContaining({
+            summary: expect.stringContaining("Visible text: invoice due Friday"),
+            mediaId: "image-id",
+            mimeType: "image/png"
+          })
+        })
+      })
+    );
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    const modelInput = runResponseLoopMock.mock.calls[0][0].input[0];
+    expect(modelInput.content).toEqual([
+      {
+        type: "input_text",
+        text: "what does this say?"
+      },
+      {
+        type: "input_image",
+        image_url: "data:image/png;base64,AQID",
+        detail: "auto"
+      }
+    ]);
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "The screenshot says the invoice is due Friday."
+    );
+  });
+
+  it("uses a default text prompt for images without captions", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "I can see a handwritten note.",
+      toolRounds: 0
+    });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [{ role: "USER", content: "User sent an image." }])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const responsesClient = {
+      createResponse: vi.fn(async () => ({
+        output_text: "Visible text: unclear. Visual context: handwritten note."
+      }))
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const whatsappMediaService = {
+      downloadAudio: vi.fn(),
+      downloadImage: vi.fn(async () => ({
+        buffer: Buffer.from([4, 5]),
+        filename: "image-id.jpg",
+        mediaId: "image-id",
+        mimeType: "image/jpeg"
+      }))
+    };
+
+    const orchestrator = new AgentOrchestrator(prisma, responsesClient, whatsappService, {
+      whatsappMediaService,
+      audioTranscriptionService: { transcribe: vi.fn() }
+    });
+
+    await orchestrator.processInboundWhatsAppMessage({
+      kind: "image",
+      from: "+15555550100",
+      messageId: "wamid.image",
+      mediaId: "image-id",
+      raw: { type: "image" }
+    });
+
+    expect(prisma.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          content: "User sent an image."
+        })
+      })
+    );
+    expect(runResponseLoopMock.mock.calls[0][0].input[0].content[0]).toEqual({
+      type: "input_text",
+      text: "User sent an image."
+    });
+  });
+
+  it("includes recent image context for screenshot follow-ups", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "The screenshot shows a Notion page titled Launch Notes.",
+      toolRounds: 0
+    });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: "USER", content: "what does that screenshot say?" }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "recent_image_context",
+            value: {
+              summary:
+                "Visible text: Launch Notes. Visual context: Notion page screenshot. Likely user intent: ask about the screenshot."
+            },
+            updatedAt: new Date()
+          }
+        ]),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "what does that screenshot say?"
+    });
+
+    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
+      "Recent image context: Visible text: Launch Notes."
+    );
+  });
+
+  it("replies with image download failures without invoking the agent loop", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const whatsappMediaService = {
+      downloadAudio: vi.fn(),
+      downloadImage: vi.fn(async () => {
+        throw new UserFacingError(
+          "WhatsApp image too large",
+          "WHATSAPP_IMAGE_TOO_LARGE",
+          "That image is too large to process. Please send a smaller image."
+        );
+      })
+    };
+    const responsesClient = { createResponse: vi.fn() } as any;
+    const orchestrator = new AgentOrchestrator(prisma, responsesClient, whatsappService, {
+      whatsappMediaService,
+      audioTranscriptionService: { transcribe: vi.fn() }
+    });
+
+    await orchestrator.processInboundWhatsAppMessage({
+      kind: "image",
+      from: "+15555550100",
+      messageId: "wamid.image",
+      mediaId: "image-id",
+      raw: { type: "image" }
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(responsesClient.createResponse).not.toHaveBeenCalled();
+    expect(prisma.message.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          role: "USER"
+        })
+      })
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "That image is too large to process. Please send a smaller image."
     );
   });
 

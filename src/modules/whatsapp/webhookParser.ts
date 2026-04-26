@@ -53,6 +53,21 @@ export function parseWhatsAppWebhook(payload: any): ParsedWhatsAppWebhook {
           continue;
         }
 
+        if (message?.type === "image" && message.image?.id && message.from && message.id) {
+          messages.push({
+            kind: "image",
+            messageId: message.id,
+            from: message.from,
+            mediaId: message.image.id,
+            mimeType: message.image.mime_type,
+            sha256: message.image.sha256,
+            caption: message.image.caption,
+            timestamp: message.timestamp,
+            raw: message
+          });
+          continue;
+        }
+
         unsupportedMessages.push({
           messageId: message?.id,
           from: message?.from,

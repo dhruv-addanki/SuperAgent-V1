@@ -19,9 +19,22 @@ export interface NormalizedWhatsAppInboundAudioMessage {
   raw: unknown;
 }
 
+export interface NormalizedWhatsAppInboundImageMessage {
+  kind: "image";
+  messageId: string;
+  from: string;
+  mediaId: string;
+  mimeType?: string;
+  sha256?: string;
+  caption?: string;
+  timestamp?: string;
+  raw: unknown;
+}
+
 export type NormalizedWhatsAppInboundMessage =
   | NormalizedWhatsAppInboundTextMessage
-  | NormalizedWhatsAppInboundAudioMessage;
+  | NormalizedWhatsAppInboundAudioMessage
+  | NormalizedWhatsAppInboundImageMessage;
 
 export type WhatsAppInboundMessagePayload = NormalizedWhatsAppInboundMessage;
 

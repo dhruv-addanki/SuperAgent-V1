@@ -61,6 +61,89 @@ describe("whatsapp media service", () => {
     });
   });
 
+  it("retrieves a media URL and downloads an image with bearer auth", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          url: "https://lookaside.example/image",
+          mime_type: "image/png",
+          sha256: "image-hash"
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: headersWithContentType("image/png"),
+        arrayBuffer: async () => new Uint8Array([4, 5, 6]).buffer
+      });
+
+    const media = await new WhatsAppMediaService().downloadImage({
+      mediaId: "image_1",
+      mimeType: "image/png"
+    });
+
+    expect(fetchMock.mock.calls[0][0].toString()).toBe(
+      "https://graph.facebook.com/v20.0/image_1?phone_number_id=phone-id"
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe("https://lookaside.example/image");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer dev-whatsapp-token");
+    expect(media).toMatchObject({
+      mediaId: "image_1",
+      mimeType: "image/png",
+      filename: "image_1.png",
+      sha256: "image-hash"
+    });
+    expect(media.buffer).toEqual(Buffer.from([4, 5, 6]));
+  });
+
+  it("rejects unsupported image media types", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        url: "https://lookaside.example/image",
+        mime_type: "image/gif"
+      })
+    });
+
+    await expect(
+      new WhatsAppMediaService().downloadImage({ mediaId: "image_1" })
+    ).rejects.toMatchObject({
+      code: "WHATSAPP_IMAGE_UNSUPPORTED"
+    });
+  });
+
+  it("rejects oversized images based on metadata", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        url: "https://lookaside.example/image",
+        mime_type: "image/jpeg",
+        file_size: 8_000_001
+      })
+    });
+
+    await expect(
+      new WhatsAppMediaService().downloadImage({ mediaId: "image_1" })
+    ).rejects.toMatchObject({
+      code: "WHATSAPP_IMAGE_TOO_LARGE"
+    });
+  });
+
+  it("maps image media rate limits to a user-facing error", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({ error: { message: "Rate limited" } })
+    });
+
+    await expect(
+      new WhatsAppMediaService().downloadImage({ mediaId: "image_1" })
+    ).rejects.toMatchObject({
+      code: "WHATSAPP_MEDIA_RATE_LIMITED",
+      userMessage: "I couldn't download that image right now. Please try again in a minute."
+    });
+  });
+
   it("rejects unsupported downloaded media types", async () => {
     fetchMock
       .mockResolvedValueOnce({

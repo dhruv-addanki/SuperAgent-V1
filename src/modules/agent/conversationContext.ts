@@ -35,6 +35,7 @@ export function buildConversationContext(input: {
         inferActiveAppFromMemory(input.memoryEntries) ??
         "general");
   const contextApps = activeApp === "multi" ? messageApps : undefined;
+  const includeImageContext = activeApp === "image" || referencesImageContext(input.latestUserMessage);
 
   const activeEntities: string[] = [];
   const recentResults: string[] = [];
@@ -85,7 +86,12 @@ export function buildConversationContext(input: {
     }
 
     if (isStaleContextEntry(entry)) continue;
-    if (!memoryBelongsToActiveApp(entry.key, activeApp, contextApps)) continue;
+    if (
+      !memoryBelongsToActiveApp(entry.key, activeApp, contextApps) &&
+      !(entry.key === "recent_image_context" && includeImageContext)
+    ) {
+      continue;
+    }
 
     const { entities, resultSummary, hints } = summarizeEntry(entry);
     for (const entity of entities) {
@@ -181,6 +187,7 @@ function inferActiveAppFromMemory(entries: PromptMemoryEntry[]): string | null {
     if (entry.key === "recent_drive_files") return "drive";
     if (entry.key.startsWith("recent_notion_")) return "notion";
     if (entry.key === "recent_automations") return "automation";
+    if (entry.key === "recent_image_context") return "image";
   }
   return null;
 }
@@ -200,6 +207,7 @@ function memoryBelongsToActiveApp(
   if (activeApp === "drive") return key === "recent_drive_files" || key === "recent_google_doc";
   if (activeApp === "notion") return key.startsWith("recent_notion_");
   if (activeApp === "automation") return key === "recent_automations";
+  if (activeApp === "image") return key === "recent_image_context";
   if (activeApp === "web") return false;
   return key.startsWith("recent_");
 }
@@ -210,11 +218,32 @@ function isStaleContextEntry(entry: PromptMemoryEntry): boolean {
   return ageMs > 1000 * 60 * 60 * 24 * 30;
 }
 
+function referencesImageContext(text: string): boolean {
+  return /\b(image|photo|picture|screenshot|screen shot|pic)\b/i.test(text);
+}
+
 function summarizeEntry(entry: PromptMemoryEntry): {
   entities: string[];
   resultSummary?: string;
   hints: string[];
 } {
+  if (entry.key === "recent_image_context") {
+    const value = entry.value as {
+      summary?: string;
+      caption?: string;
+    };
+    if (!value?.summary) return { entities: [], hints: [] };
+    return {
+      entities: [
+        `Recent image${value.caption ? ` with caption: ${value.caption}` : ""}`
+      ],
+      resultSummary: `Recent image context: ${value.summary}`,
+      hints: [
+        "If the user says that image, that screenshot, this photo, or the image I sent, use the stored image context above. Do not identify people from images."
+      ]
+    };
+  }
+
   if (entry.key === "recent_google_doc") {
     const value = entry.value as {
       title?: string;

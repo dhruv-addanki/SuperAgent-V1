@@ -39,6 +39,7 @@ const envSchema = z
     WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().optional().default(""),
     WHATSAPP_APP_SECRET: z.string().optional().default(""),
     WHATSAPP_MAX_AUDIO_BYTES: z.coerce.number().int().positive().default(25_000_000),
+    WHATSAPP_MAX_IMAGE_BYTES: z.coerce.number().int().positive().default(8_000_000),
     WHATSAPP_AUTOMATION_TEMPLATE_NAME: z.string().optional().default(""),
     WHATSAPP_AUTOMATION_TEMPLATE_LANGUAGE: z.string().min(1).default("en_US"),
 

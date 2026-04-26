@@ -17,6 +17,12 @@ const SUPPORTED_AUDIO_MIME_TYPES = new Map<string, string>([
   ["video/mp4", "mp4"]
 ]);
 
+const SUPPORTED_IMAGE_MIME_TYPES = new Map<string, string>([
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"]
+]);
+
 interface WhatsAppMediaMetadataResponse {
   url?: string;
   mime_type?: string;
@@ -105,7 +111,82 @@ export class WhatsAppMediaService {
     };
   }
 
-  private async getMediaMetadata(mediaId: string): Promise<WhatsAppMediaMetadataResponse> {
+  async downloadImage(input: {
+    mediaId: string;
+    mimeType?: string;
+    sha256?: string;
+  }): Promise<DownloadedWhatsAppMedia> {
+    const metadata = await this.getMediaMetadata(input.mediaId, "image");
+    const metadataMimeType = normalizeMimeType(metadata.mime_type ?? input.mimeType);
+    const extension = imageExtensionForMimeType(metadataMimeType);
+    if (!extension) {
+      throw new UserFacingError(
+        "Unsupported WhatsApp image type",
+        "WHATSAPP_IMAGE_UNSUPPORTED",
+        "I can read JPEG, PNG, and WebP images. Please send the image in one of those formats."
+      );
+    }
+
+    if (metadata.file_size && metadata.file_size > env.WHATSAPP_MAX_IMAGE_BYTES) {
+      throw new UserFacingError(
+        "WhatsApp image too large",
+        "WHATSAPP_IMAGE_TOO_LARGE",
+        "That image is too large to process. Please send a smaller image."
+      );
+    }
+
+    if (!metadata.url) {
+      throw new UserFacingError(
+        "WhatsApp media URL missing",
+        "WHATSAPP_MEDIA_DOWNLOAD_FAILED",
+        "I couldn't download that image. Please try sending it again."
+      );
+    }
+
+    const response = await fetch(metadata.url, {
+      headers: {
+        Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`
+      }
+    });
+
+    if (!response.ok) {
+      throw this.mapError(response.status, "image");
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > env.WHATSAPP_MAX_IMAGE_BYTES) {
+      throw new UserFacingError(
+        "WhatsApp image too large",
+        "WHATSAPP_IMAGE_TOO_LARGE",
+        "That image is too large to process. Please send a smaller image."
+      );
+    }
+
+    const downloadedMimeType = normalizeMimeType(
+      response.headers.get("content-type") ?? metadataMimeType
+    );
+    const downloadedExtension = imageExtensionForMimeType(downloadedMimeType);
+    if (!downloadedExtension) {
+      throw new UserFacingError(
+        "Unsupported WhatsApp image type",
+        "WHATSAPP_IMAGE_UNSUPPORTED",
+        "I can read JPEG, PNG, and WebP images. Please send the image in one of those formats."
+      );
+    }
+
+    return {
+      buffer,
+      mediaId: input.mediaId,
+      mimeType: downloadedMimeType,
+      filename: `${input.mediaId}.${downloadedExtension}`,
+      sha256: metadata.sha256 ?? input.sha256
+    };
+  }
+
+  private async getMediaMetadata(
+    mediaId: string,
+    mediaKind: "audio" | "image" = "audio"
+  ): Promise<WhatsAppMediaMetadataResponse> {
     const url = new URL(`${GRAPH_API_BASE_URL}/${mediaId}`);
     url.searchParams.set("phone_number_id", env.WHATSAPP_PHONE_NUMBER_ID);
 
@@ -119,18 +200,19 @@ export class WhatsAppMediaService {
     const payload = (await response.json().catch(() => ({}))) as WhatsAppMediaMetadataResponse;
 
     if (!response.ok) {
-      throw this.mapError(response.status);
+      throw this.mapError(response.status, mediaKind);
     }
 
     return payload;
   }
 
-  private mapError(status: number): UserFacingError {
+  private mapError(status: number, mediaKind: "audio" | "image" = "audio"): UserFacingError {
+    const noun = mediaKind === "image" ? "image" : "voice message";
     if (status === 401 || status === 403) {
       return new UserFacingError(
         "WhatsApp media auth failed",
         "WHATSAPP_MEDIA_AUTH_FAILED",
-        "I couldn't download that voice message. Please try sending it again."
+        `I couldn't download that ${noun}. Please try sending it again.`
       );
     }
 
@@ -138,7 +220,7 @@ export class WhatsAppMediaService {
       return new UserFacingError(
         "WhatsApp media not found",
         "WHATSAPP_MEDIA_NOT_FOUND",
-        "I couldn't download that voice message. Please try sending it again."
+        `I couldn't download that ${noun}. Please try sending it again.`
       );
     }
 
@@ -146,14 +228,14 @@ export class WhatsAppMediaService {
       return new UserFacingError(
         "WhatsApp media rate limited",
         "WHATSAPP_MEDIA_RATE_LIMITED",
-        "I couldn't download that voice message right now. Please try again in a minute."
+        `I couldn't download that ${noun} right now. Please try again in a minute.`
       );
     }
 
     return new UserFacingError(
       "WhatsApp media download failed",
       "WHATSAPP_MEDIA_DOWNLOAD_FAILED",
-      "I couldn't download that voice message. Please try sending it again."
+      `I couldn't download that ${noun}. Please try sending it again.`
     );
   }
 }
@@ -164,4 +246,8 @@ function normalizeMimeType(mimeType?: string | null): string {
 
 function extensionForMimeType(mimeType: string): string | null {
   return SUPPORTED_AUDIO_MIME_TYPES.get(mimeType) ?? null;
+}
+
+function imageExtensionForMimeType(mimeType: string): string | null {
+  return SUPPORTED_IMAGE_MIME_TYPES.get(mimeType) ?? null;
 }

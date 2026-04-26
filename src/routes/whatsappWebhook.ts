@@ -89,7 +89,7 @@ async function enqueueOrProcessMessage(
 
   if (deps.queue) {
     try {
-      await deps.queue.add(data.kind === "audio" ? "inbound-audio" : "inbound-text", data, {
+      await deps.queue.add(inboundJobName(data.kind), data, {
         jobId: data.messageId
       });
       return;
@@ -103,4 +103,10 @@ async function enqueueOrProcessMessage(
       logger.error({ error }, "Inline WhatsApp message processing failed");
     });
   });
+}
+
+function inboundJobName(kind: InboundWhatsAppJobData["kind"]): string {
+  if (kind === "audio") return "inbound-audio";
+  if (kind === "image") return "inbound-image";
+  return "inbound-text";
 }

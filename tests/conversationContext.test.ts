@@ -179,6 +179,29 @@ describe("conversation context", () => {
     expect(context.communicationHints[0]).toContain("same Notion page");
   });
 
+  it("includes recent image context for screenshot follow-ups", () => {
+    const context = buildConversationContext({
+      latestUserMessage: "what does that screenshot say?",
+      memoryEntries: [
+        {
+          key: "recent_image_context",
+          value: {
+            summary:
+              "Visible text: Launch Notes. Visual context: Notion page screenshot. Likely user intent: read the screenshot."
+          },
+          updatedAt: new Date()
+        }
+      ],
+      pendingAction: null,
+      pendingActionSummary: "No pending actions."
+    });
+
+    expect(context.activeApp).toBe("image");
+    expect(context.activeEntities).toEqual(["Recent image"]);
+    expect(context.recentResults[0]).toContain("Visible text: Launch Notes");
+    expect(context.communicationHints[0]).toContain("that screenshot");
+  });
+
   it("includes profile, response preferences, and integration status in prompt context", () => {
     const context = buildConversationContext({
       latestUserMessage: "summarize this",

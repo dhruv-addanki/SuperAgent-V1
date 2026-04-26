@@ -11,6 +11,7 @@ process.env.WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN ?? "verify
 process.env.WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN ?? "dev-whatsapp-token";
 process.env.WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID ?? "phone-id";
 process.env.WHATSAPP_MAX_AUDIO_BYTES = process.env.WHATSAPP_MAX_AUDIO_BYTES ?? "25000000";
+process.env.WHATSAPP_MAX_IMAGE_BYTES = process.env.WHATSAPP_MAX_IMAGE_BYTES ?? "8000000";
 process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "google-client";
 process.env.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "google-secret";
 process.env.GOOGLE_REDIRECT_URI =

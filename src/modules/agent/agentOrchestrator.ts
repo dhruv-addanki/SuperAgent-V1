@@ -7,7 +7,7 @@ import {
 } from "@prisma/client";
 import { env } from "../../config/env";
 import { logger } from "../../config/logger";
-import type { ResponsesClient } from "../../lib/openaiClient";
+import type { ResponseInputItem, ResponsesClient } from "../../lib/openaiClient";
 import { userMessageForError } from "../../lib/errors";
 import { AudioTranscriptionService } from "../audio/audioTranscriptionService";
 import { WhatsAppService } from "../whatsapp/whatsappService";
@@ -29,7 +29,7 @@ import { getOrCreateWhatsAppConversation, persistMessage } from "./conversationS
 import { buildSystemPrompt } from "./systemPrompt";
 import { ToolExecutor } from "./toolExecutor";
 import { getAvailableToolDefinitions } from "./toolRegistry";
-import { runResponseLoop } from "./responseLoop";
+import { extractOutputText, runResponseLoop } from "./responseLoop";
 import {
   buildConversationContext,
   formatConversationContextForPrompt,
@@ -82,10 +82,20 @@ interface PreparedInboundText {
   text: string;
   messageId?: string;
   rawPayload?: unknown;
+  modelInputItem?: ResponseInputItem;
+  imageContext?: PreparedImageContext;
+}
+
+interface PreparedImageContext {
+  mediaId: string;
+  caption?: string;
+  mimeType?: string;
+  downloadedMimeType: string;
+  sha256?: string;
 }
 
 interface AgentOrchestratorOptions {
-  whatsappMediaService?: Pick<WhatsAppMediaService, "downloadAudio">;
+  whatsappMediaService?: Pick<WhatsAppMediaService, "downloadAudio" | "downloadImage">;
   audioTranscriptionService?: Pick<AudioTranscriptionService, "transcribe">;
 }
 
@@ -94,7 +104,7 @@ export class AgentOrchestrator {
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
   private readonly setupStatusService: SetupStatusService;
-  private readonly whatsappMediaService: Pick<WhatsAppMediaService, "downloadAudio">;
+  private readonly whatsappMediaService: Pick<WhatsAppMediaService, "downloadAudio" | "downloadImage">;
   private readonly audioTranscriptionService: Pick<AudioTranscriptionService, "transcribe">;
 
   constructor(
@@ -164,6 +174,7 @@ export class AgentOrchestrator {
       if (memoryExtraction.timezone) {
         user = { ...user, timezone: memoryExtraction.timezone };
       }
+      await this.maybeRememberImageContext(user.id, preparedInput);
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
@@ -175,6 +186,7 @@ export class AgentOrchestrator {
       );
       const firstInteraction = isFirstInteraction(history);
       const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
+      const shouldUseTextShortcuts = !preparedInput.modelInputItem;
       const appendSetupHint =
         firstInteraction &&
         !setupRequest &&
@@ -238,7 +250,7 @@ export class AgentOrchestrator {
         preparedInput.text,
         memoryEntries
       );
-      if (ambiguousBulkComplete) {
+      if (shouldUseTextShortcuts && ambiguousBulkComplete) {
         const scopeLabel = ambiguousBulkComplete.projectName
           ? `${ambiguousBulkComplete.taskCount} listed tasks in ${ambiguousBulkComplete.projectName}`
           : `${ambiguousBulkComplete.taskCount} listed tasks`;
@@ -252,7 +264,7 @@ export class AgentOrchestrator {
         preparedInput.text,
         memoryEntries
       );
-      if (recentGoogleDocToDelete) {
+      if (shouldUseTextShortcuts && recentGoogleDocToDelete) {
         const result = await this.toolExecutor.executeToolCall(
           "drive_delete_file",
           { fileId: recentGoogleDocToDelete.documentId },
@@ -272,7 +284,7 @@ export class AgentOrchestrator {
       }
 
       const genericCalendarOverview =
-        !isCompoundIntent
+        shouldUseTextShortcuts && !isCompoundIntent
           ? matchGenericCalendarOverviewRequest(preparedInput.text) ??
             matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history)
           : null;
@@ -315,7 +327,7 @@ export class AgentOrchestrator {
         memoryEntries,
         user.timezone
       );
-      if (asanaTodayAndLatestOpen) {
+      if (shouldUseTextShortcuts && asanaTodayAndLatestOpen) {
         const [todayResult, latestOpenResult] = await Promise.all([
           this.toolExecutor.executeToolCall(
             "asana_list_my_tasks",
@@ -378,7 +390,7 @@ export class AgentOrchestrator {
         history,
         memoryEntries
       );
-      if (!isCompoundIntent && asanaLatestShortcut) {
+      if (shouldUseTextShortcuts && !isCompoundIntent && asanaLatestShortcut) {
         const toolName =
           asanaLatestShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
         const result = await this.toolExecutor.executeToolCall(
@@ -426,7 +438,7 @@ export class AgentOrchestrator {
         memoryEntries,
         user.timezone
       );
-      if (!isCompoundIntent && asanaListShortcut) {
+      if (shouldUseTextShortcuts && !isCompoundIntent && asanaListShortcut) {
         const toolName =
           asanaListShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
         const result = await this.toolExecutor.executeToolCall(
@@ -471,7 +483,7 @@ export class AgentOrchestrator {
       }
 
       const genericAsanaTaskOverview = matchGenericAsanaMyTasksRequest(preparedInput.text);
-      if (!isCompoundIntent && genericAsanaTaskOverview) {
+      if (shouldUseTextShortcuts && !isCompoundIntent && genericAsanaTaskOverview) {
         const result = await this.toolExecutor.executeToolCall(
           "asana_list_my_tasks",
           {
@@ -526,7 +538,7 @@ export class AgentOrchestrator {
         model: env.OPENAI_MODEL,
         instructions: prompt,
         tools: getAvailableToolDefinitions(),
-        input: history,
+        input: inputWithPreparedCurrentTurn(history, preparedInput),
         executeTool: (toolName, toolInput) =>
           this.toolExecutor.executeToolCall(toolName, toolInput, {
             user,
@@ -552,6 +564,39 @@ export class AgentOrchestrator {
         text: input.text,
         messageId: input.messageId,
         rawPayload: input.raw
+      };
+    }
+
+    if (input.kind === "image") {
+      const media = await this.whatsappMediaService.downloadImage({
+        mediaId: input.mediaId,
+        mimeType: input.mimeType,
+        sha256: input.sha256
+      });
+      const text = input.caption?.trim() || "User sent an image.";
+      const imageDataUrl = `data:${media.mimeType};base64,${media.buffer.toString("base64")}`;
+
+      return {
+        from: input.from,
+        text,
+        messageId: input.messageId,
+        rawPayload: {
+          kind: "image",
+          mediaId: input.mediaId,
+          mimeType: input.mimeType,
+          downloadedMimeType: media.mimeType,
+          sha256: media.sha256,
+          caption: input.caption,
+          raw: input.raw
+        },
+        modelInputItem: buildImageInputItem(text, imageDataUrl),
+        imageContext: {
+          mediaId: input.mediaId,
+          caption: input.caption,
+          mimeType: input.mimeType,
+          downloadedMimeType: media.mimeType,
+          sha256: media.sha256
+        }
       };
     }
 
@@ -583,6 +628,45 @@ export class AgentOrchestrator {
         raw: input.raw
       }
     };
+  }
+
+  private async maybeRememberImageContext(
+    userId: string,
+    preparedInput: PreparedInboundText
+  ): Promise<void> {
+    if (!preparedInput.imageContext || !preparedInput.modelInputItem) return;
+
+    try {
+      const response = await this.responsesClient.createResponse({
+        model: env.OPENAI_MODEL,
+        instructions: [
+          "Summarize this WhatsApp image for later assistant follow-ups.",
+          "Return 3 concise fields in plain text: Visible text, Visual context, Likely user intent.",
+          "Do not identify people. If details are unclear, say unclear."
+        ].join("\n"),
+        tools: [],
+        input: [preparedInput.modelInputItem]
+      });
+      const summary = extractOutputText(response);
+      if (!summary) return;
+      const value = imageContextMemoryValue(preparedInput.imageContext, summary);
+
+      await this.prisma.memoryEntry.upsert({
+        where: { userId_key: { userId, key: "recent_image_context" } },
+        update: {
+          value,
+          confidence: 0.7
+        },
+        create: {
+          userId,
+          key: "recent_image_context",
+          value,
+          confidence: 0.7
+        }
+      });
+    } catch (error) {
+      logger.warn({ error }, "Failed to store WhatsApp image context");
+    }
   }
 
   private async handleConfirmationIntent(input: {
@@ -661,6 +745,55 @@ function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {
 function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): string {
   const hint = formatSetupHintForWhatsApp(setupStatus);
   return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
+
+function buildImageInputItem(text: string, imageDataUrl: string): ResponseInputItem {
+  return {
+    role: "user",
+    content: [
+      {
+        type: "input_text",
+        text
+      },
+      {
+        type: "input_image",
+        image_url: imageDataUrl,
+        detail: "auto"
+      }
+    ]
+  };
+}
+
+function inputWithPreparedCurrentTurn(
+  history: ResponseInputItem[],
+  preparedInput: PreparedInboundText
+): ResponseInputItem[] {
+  if (!preparedInput.modelInputItem) return history;
+
+  const next = [...history];
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    if (next[index]?.role === "user") {
+      next[index] = preparedInput.modelInputItem;
+      return next;
+    }
+  }
+
+  return next.concat(preparedInput.modelInputItem);
+}
+
+function imageContextMemoryValue(
+  context: PreparedImageContext,
+  summary: string
+): Record<string, string> {
+  const value: Record<string, string> = {
+    summary,
+    mediaId: context.mediaId,
+    mimeType: context.mimeType ?? context.downloadedMimeType,
+    createdAt: new Date().toISOString()
+  };
+  if (context.caption) value.caption = context.caption;
+  if (context.sha256) value.sha256 = context.sha256;
+  return value;
 }
 
 function matchRecentGoogleDocDeleteRequest(

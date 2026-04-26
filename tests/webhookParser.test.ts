@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseWhatsAppWebhook } from "../src/modules/whatsapp/webhookParser";
 
 describe("WhatsApp webhook parser", () => {
-  it("extracts text, audio, and statuses", () => {
+  it("extracts text, audio, image, and statuses", () => {
     const parsed = parseWhatsAppWebhook({
       entry: [
         {
@@ -34,7 +34,12 @@ describe("WhatsApp webhook parser", () => {
                     from: "15555550100",
                     timestamp: "1776700002",
                     type: "image",
-                    image: { id: "image-id" }
+                    image: {
+                      id: "image-id",
+                      mime_type: "image/jpeg",
+                      sha256: "image-hash",
+                      caption: "what does this say?"
+                    }
                   }
                 ],
                 statuses: [
@@ -52,7 +57,7 @@ describe("WhatsApp webhook parser", () => {
       ]
     });
 
-    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages).toHaveLength(3);
     expect(parsed.messages[0]).toMatchObject({
       kind: "text",
       text: expect.stringContaining("calendar")
@@ -64,7 +69,16 @@ describe("WhatsApp webhook parser", () => {
       sha256: "hash",
       isVoice: true
     });
-    expect(parsed.unsupportedMessages[0]!.type).toBe("image");
+    expect(parsed.messages[2]).toMatchObject({
+      kind: "image",
+      messageId: "wamid.3",
+      from: "15555550100",
+      mediaId: "image-id",
+      mimeType: "image/jpeg",
+      sha256: "image-hash",
+      caption: "what does this say?"
+    });
+    expect(parsed.unsupportedMessages).toHaveLength(0);
     expect(parsed.statuses[0]!.status).toBe("delivered");
   });
 });
