@@ -193,15 +193,7 @@ export class AutomationScheduler {
     return runResponseLoop({
       client: this.responsesClient,
       model: env.OPENAI_MODEL,
-      instructions: [
-        prompt,
-        "Scheduled automation mode:",
-        "- Only use read-only information tools.",
-        "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
-        "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
-        "- If a requested source is unavailable, include that briefly in the digest.",
-        "- For Asana planning based on the user's own work, use asana_list_my_tasks. Do not call asana_list_project_tasks unless you have a real projectGid from recent context or asana_list_projects."
-      ].join("\n"),
+      instructions: buildScheduledAutomationInstructions(prompt),
       tools: buildToolDefinitions(true).filter(
         (tool) => typeof tool.name !== "string" || !tool.name.startsWith("automation_")
       ),
@@ -416,9 +408,34 @@ export class AutomationScheduler {
   }
 }
 
-function formatAutomationDigest(name: string, body: string): string {
-  const compactBody = stripRedundantDigestHeading(body.trim()) || "No summary was produced.";
-  return `${name}\n\n${compactBody}`;
+export function formatAutomationDigest(name: string, body: string): string {
+  const compactBody =
+    capAutomationDigestLines(stripWeakDigestTail(stripRedundantDigestHeading(body.trim()))) ||
+    "No summary was produced.";
+  return normalizeAssistantMessageForUser(`${name}\n\n${compactBody}`);
+}
+
+export function buildScheduledAutomationInstructions(basePrompt: string): string {
+  return [
+    basePrompt,
+    "Scheduled automation mode:",
+    "- Only use read-only information tools.",
+    "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
+    "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
+    "- Write the digest as a compact command center for starting the day.",
+    "- Target 10 to 14 WhatsApp-friendly lines. You may go slightly longer for real conflicts or source failures.",
+    "- Use these section labels when relevant: At a glance, Schedule, Focus plan, Watchouts, You can ask me to.",
+    "- Start with At a glance: one line summarizing the day, urgency, conflicts, and top focus.",
+    "- Keep Schedule short. Include key events and conflicts, not every detail when the day is busy.",
+    "- Keep Focus plan realistic. Prefer 2 or 3 time blocks or priorities.",
+    "- Use Watchouts for calendar overlaps, time-sensitive email, missing source data, or risky assumptions.",
+    "- End with You can ask me to only when useful, with 1 to 3 exact reply commands in quotes.",
+    "- Suggested commands must be actions the user can send after the digest, such as \"Move office hours to another slot\", \"Draft a reply to the Okta email\", or \"Create a calendar block for the Chase call\".",
+    "- Scheduled runs stay read-only. Never claim you already performed a suggested follow-up action.",
+    "- Avoid overconfident priority claims. Prefer wording like \"I'd prioritize\" or \"Good candidates\".",
+    "- If a requested source is unavailable, include that briefly in Watchouts without drowning out successful sections.",
+    "- For Asana planning based on the user's own work, use asana_list_my_tasks. Do not call asana_list_project_tasks unless you have a real projectGid from recent context or asana_list_projects."
+  ].join("\n");
 }
 
 function formatPreloadedAutomationResult(
@@ -514,4 +531,54 @@ function looksLikeAsanaGid(value: unknown): boolean {
 
 function stripRedundantDigestHeading(body: string): string {
   return body.replace(/^\s*(?:[-*•]\s*)?(?:morning\s+)?digest\s*:?\s*/i, "").trim();
+}
+
+function stripWeakDigestTail(body: string): string {
+  return body
+    .replace(
+      /\n{1,2}(?:if you want,?\s*)?i can (?:retry|run|check|help|try)[^\n]*(?:now|instead)?\.?\s*$/i,
+      ""
+    )
+    .trim();
+}
+
+function capAutomationDigestLines(body: string): string {
+  const lines = body
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line, index, allLines) => line.trim() || (index > 0 && allLines[index - 1]?.trim()));
+  const maxLines = 18;
+  if (lines.length <= maxLines) return lines.join("\n").trim();
+
+  const selected = new Set<number>();
+  for (let index = 0; index < lines.length && selected.size < 14; index += 1) {
+    selected.add(index);
+  }
+
+  for (let index = 0; index < lines.length && selected.size < maxLines; index += 1) {
+    if (isHighValueDigestLine(lines[index] ?? "")) selected.add(index);
+  }
+
+  const actionSectionIndex = lines.findIndex((line) => /^you can ask me to:?$/i.test(line.trim()));
+  if (actionSectionIndex >= 0) {
+    for (
+      let index = actionSectionIndex;
+      index < Math.min(lines.length, actionSectionIndex + 4) && selected.size < maxLines;
+      index += 1
+    ) {
+      selected.add(index);
+    }
+  }
+
+  return Array.from(selected)
+    .sort((left, right) => left - right)
+    .map((index) => lines[index])
+    .join("\n")
+    .trim();
+}
+
+function isHighValueDigestLine(line: string): boolean {
+  return /\b(conflict|overlap|watchout|watchouts|unavailable|failed|couldn'?t|urgent|time sensitive|you can ask me to)\b/i.test(
+    line
+  );
 }
