@@ -60,6 +60,7 @@ import {
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest
 } from "./asanaReadShortcut";
 import {
@@ -549,6 +550,41 @@ export class AgentOrchestrator {
             emptyLabel: `I don't see open Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
             scopeName: asanaListShortcut.project?.name,
             emphasizeImportance: asanaListShortcut.emphasizeImportance
+          })
+        );
+        return;
+      }
+
+      const genericAsanaOpenTasks = matchGenericAsanaOpenTasksRequest(preparedInput.text);
+      if (shouldUseTextShortcuts && !isCompoundIntent && genericAsanaOpenTasks) {
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_list_my_tasks",
+          {
+            completed: false,
+            limit: 50,
+            sortBy: "due",
+            sortDirection: "asc"
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+
+        if (!result.ok) {
+          await replyToUser(
+            result.userMessage ??
+              "I couldn't load your Asana tasks right now. Try again in a moment."
+          );
+          return;
+        }
+
+        await replyToUser(
+          formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+            label: "from My Tasks",
+            emptyLabel: "I don't see any open Asana tasks in My Tasks.",
+            emphasizeImportance: true
           })
         );
         return;

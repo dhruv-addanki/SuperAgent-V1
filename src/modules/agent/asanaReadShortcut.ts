@@ -76,6 +76,7 @@ export function matchGenericAsanaMyTasksRequest(
   text: string
 ): GenericAsanaTaskTarget | null {
   const normalized = normalize(text);
+  if (isLikelyAsanaWriteRequest(normalized)) return null;
   const referencesAsana = /\basana\b/.test(normalized);
   const referencesPersonalTasks =
     /\bmy asana tasks\b/.test(normalized) ||
@@ -97,6 +98,26 @@ export function matchGenericAsanaMyTasksRequest(
   if (/\btomorrow\b/.test(normalized)) return "tomorrow";
   if (/\btoday\b/.test(normalized)) return "today";
   return null;
+}
+
+export function matchGenericAsanaOpenTasksRequest(text: string): boolean {
+  const normalized = normalize(text);
+  if (isLikelyAsanaWriteRequest(normalized)) return false;
+
+  const referencesAsana = /\basana\b/.test(normalized);
+  const referencesTasks =
+    /\bmy tasks\b/.test(normalized) ||
+    /\basana tasks\b/.test(normalized) ||
+    /\ball asana tasks\b/.test(normalized);
+  const asksForOverview =
+    /\bcheck\b/.test(normalized) ||
+    /\bshow\b/.test(normalized) ||
+    /\blist\b/.test(normalized) ||
+    /\bwhat(?:'s|s)?\b/.test(normalized);
+
+  if (!asksForOverview) return false;
+  if (/\btoday\b|\btomorrow\b|\bdue\b|\bbefore\b/.test(normalized)) return false;
+  return referencesAsana || referencesTasks;
 }
 
 export function asanaTaskDueDate(
@@ -121,6 +142,7 @@ export function matchAsanaDueTodayAndLatestOpenRequest(
   baseDate = new Date()
 ): { dueOn: string; label: GenericAsanaTaskTarget } | null {
   const normalized = normalize(text);
+  if (isLikelyAsanaWriteRequest(normalized)) return null;
   const asksForTodayTasks =
     /\b(today|tomorrow)\b/.test(normalized) &&
     (/\bimportant\b/.test(normalized) ||
@@ -151,6 +173,7 @@ export function matchAsanaListShortcut(
   baseDate = new Date()
 ): AsanaListShortcut | null {
   const normalized = normalize(text);
+  if (isLikelyAsanaWriteRequest(normalized)) return null;
   if (!isLikelyAsanaRequest(normalized, history, memoryEntries)) return null;
 
   const scope = resolveScope(normalized, memoryEntries);
@@ -190,6 +213,7 @@ export function matchAsanaLatestTaskShortcut(
   memoryEntries: PromptMemoryEntry[]
 ): AsanaLatestTaskShortcut | null {
   const normalized = normalize(text);
+  if (isLikelyAsanaWriteRequest(normalized)) return null;
   if (!isLikelyAsanaRequest(normalized, history, memoryEntries)) return null;
   if (!/\b(last|latest)\b/.test(normalized)) return null;
 
@@ -334,6 +358,23 @@ export function formatAsanaTodayAndLatestOpenReply(
 
 function normalize(text: string): string {
   return text.trim().toLowerCase();
+}
+
+function isLikelyAsanaWriteRequest(normalizedText: string): boolean {
+  const mentionsTask = /\b(tasks?|asana)\b/.test(normalizedText);
+  const createTask =
+    /\b(create|add|make|set up)\b[^.?!]*\btasks?\b/.test(normalizedText) ||
+    /\btasks?\b[^.?!]*\b(create|add|make|set up)\b/.test(normalizedText);
+  const mutateTask =
+    /\b(delete|remove|trash|update|rename|change|move)\b[^.?!]*\btasks?\b/.test(normalizedText) ||
+    /\btasks?\b[^.?!]*\b(delete|remove|trash|update|rename|change|move)\b/.test(normalizedText);
+  const completeTask =
+    /\b(mark|set)\b[^.?!]*\btasks?\b[^.?!]*\b(complete|done|incomplete|open)\b/.test(
+      normalizedText
+    ) ||
+    /\b(complete|finish)\b[^.?!]*\btasks?\b/.test(normalizedText);
+
+  return mentionsTask && (createTask || mutateTask || completeTask);
 }
 
 function isLikelyAsanaRequest(

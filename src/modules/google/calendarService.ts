@@ -1,4 +1,5 @@
 import { ExternalApiError } from "../../lib/errors";
+import { logger } from "../../config/logger";
 import type {
   CalendarEventSummary,
   CalendarSummary,
@@ -108,7 +109,7 @@ export class CalendarService {
       }
 
       const calendars = await this.fetchReadableCalendars(calendar);
-      const perCalendarResults = await Promise.all(
+      const perCalendarResults = await Promise.allSettled(
         calendars.map(async (entry) => {
           const result = await calendar.events.list({
             calendarId: entry.id,
@@ -126,7 +127,31 @@ export class CalendarService {
         })
       );
 
-      return mergeCalendarEventCollections(perCalendarResults, input.maxResults ?? 25);
+      const fulfilled = perCalendarResults
+        .filter((result): result is PromiseFulfilledResult<CalendarEventSummary[]> => result.status === "fulfilled")
+        .map((result) => result.value);
+      const rejected = perCalendarResults.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected"
+      );
+
+      if (rejected.length && fulfilled.length) {
+        logger.warn(
+          {
+            failedCalendars: rejected.length,
+            totalCalendars: calendars.length,
+            errors: rejected.map((result) =>
+              result.reason instanceof Error ? result.reason.message : String(result.reason)
+            )
+          },
+          "Some Google calendars could not be read"
+        );
+      }
+
+      if (!fulfilled.length && rejected.length) {
+        throw rejected[0]?.reason ?? new Error("All calendar event requests failed");
+      }
+
+      return mergeCalendarEventCollections(fulfilled, input.maxResults ?? 25);
     } catch (error) {
       throw new ExternalApiError("calendar", "I couldn't reach Google Calendar right now.", error);
     }

@@ -19,9 +19,9 @@ describe("agent orchestrator", () => {
   });
 
   it("does not require Google to be connected before handling Asana requests", async () => {
-    runResponseLoopMock.mockResolvedValue({
-      assistantMessage: "Asana tasks ready",
-      toolRounds: 0
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall").mockResolvedValue({
+      ok: true,
+      data: [{ gid: "task_1", name: "Asana task", completed: false }]
     });
 
     const prisma = {
@@ -69,13 +69,22 @@ describe("agent orchestrator", () => {
       text: "Show my Asana tasks"
     });
 
-    expect(runResponseLoopMock).toHaveBeenCalledOnce();
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.objectContaining({
+        completed: false,
+        limit: 50,
+        sortBy: "due",
+        sortDirection: "asc"
+      }),
+      expect.objectContaining({
+        latestUserMessage: "Show my Asana tasks"
+      })
+    );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Asana tasks ready"
-    );
-    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
-      "Structured conversation context:"
+      expect.stringContaining("Asana task")
     );
   });
 

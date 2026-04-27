@@ -27,9 +27,13 @@ import {
 import { getOrCreateWhatsAppConversation, persistMessage } from "../agent/conversationState";
 import { runResponseLoop } from "../agent/responseLoop";
 import { buildSystemPrompt } from "../agent/systemPrompt";
-import { ToolExecutor } from "../agent/toolExecutor";
+import { ToolExecutor, type ToolExecutionResult } from "../agent/toolExecutor";
 import { WhatsAppService } from "../whatsapp/whatsappService";
 import { AutomationService, type ClaimedAutomation } from "./automationService";
+import { calendarOverviewWindow, formatCalendarOverview } from "../agent/calendarReadShortcut";
+import { formatScopedAsanaTaskList } from "../agent/asanaReadShortcut";
+import type { CalendarEventSummary } from "../google/googleTypes";
+import type { AsanaTaskSummary } from "../asana/asanaTypes";
 
 interface AutomationSchedulerOptions {
   pollIntervalSeconds?: number;
@@ -162,10 +166,14 @@ export class AutomationScheduler {
   ) {
     const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
     const setupStatus = await this.setupStatusService.getStatus(user);
+    const preloadedData = await this.buildAutomationDataSnapshot(automation, user, conversation);
     const automationInput = [
       "Run this scheduled automation now.",
       `Automation name: ${automation.name}`,
       `Saved instructions: ${automation.prompt}`,
+      preloadedData.length
+        ? ["Preloaded read-only data for this run:", ...preloadedData].join("\n\n")
+        : "No preloaded data was available for this run.",
       "Return one compact WhatsApp digest. Do not ask follow-up questions unless the automation cannot run."
     ].join("\n");
     const conversationContext = buildConversationContext({
@@ -190,6 +198,7 @@ export class AutomationScheduler {
         "Scheduled automation mode:",
         "- Only use read-only information tools.",
         "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
+        "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
         "- If a requested source is unavailable, include that briefly in the digest.",
         "- For Asana planning based on the user's own work, use asana_list_my_tasks. Do not call asana_list_project_tasks unless you have a real projectGid from recent context or asana_list_projects."
       ].join("\n"),
@@ -198,66 +207,146 @@ export class AutomationScheduler {
       ),
       input: [{ role: "user", content: automationInput }],
       executeTool: async (toolName, toolInput) => {
-        if (
-          !isToolName(toolName) ||
-          !isReadOnlyTool(toolName) ||
-          toolName.startsWith("automation_")
-        ) {
-          return Promise.resolve({
-            ok: false,
-            error: "AUTOMATION_WRITE_BLOCKED",
-            userMessage: "Scheduled automations can only use read-only tools."
-          });
-        }
-        const routedCall = routeAutomationToolCall(toolName, toolInput);
-        const routed = routedCall.toolName !== toolName || routedCall.input !== toolInput;
-        logger.info(
-          {
-            automationId: automation.id,
-            requestedToolName: toolName,
-            routedToolName: routedCall.toolName,
-            routed,
-            inputSummary: summarizeAutomationToolInput(routedCall.input)
-          },
-          "Automation tool call"
-        );
-
-        const result = await this.toolExecutor.executeToolCall(
-          routedCall.toolName,
-          routedCall.input,
-          {
-            user,
-            conversation,
-            latestUserMessage: automation.prompt
-          },
-          { force: true }
-        );
-        if (result.ok) {
-          logger.info(
-            {
-              automationId: automation.id,
-              requestedToolName: toolName,
-              routedToolName: routedCall.toolName
-            },
-            "Automation tool result"
-          );
-        } else {
-          logger.warn(
-            {
-              automationId: automation.id,
-              requestedToolName: toolName,
-              routedToolName: routedCall.toolName,
-              error: result.error,
-              userMessage: result.userMessage
-            },
-            "Automation tool result"
-          );
-        }
-        return result;
+        return this.executeReadOnlyAutomationTool(automation, user, conversation, toolName, toolInput);
       },
       maxToolRounds: env.MAX_TOOL_ROUNDS,
       continueAfterToolMessages: true
     });
+  }
+
+  private async buildAutomationDataSnapshot(
+    automation: Automation,
+    user: User,
+    conversation: Conversation
+  ): Promise<string[]> {
+    const requestText = `${automation.name}\n${automation.prompt}`.toLowerCase();
+    const sections: string[] = [];
+
+    if (/\b(email|emails|gmail|inbox|mail)\b/.test(requestText)) {
+      const result = await this.executeReadOnlyAutomationTool(
+        automation,
+        user,
+        conversation,
+        "gmail_search_threads",
+        {
+          query: "in:inbox newer_than:1d",
+          maxResults: 10
+        }
+      );
+      sections.push(formatPreloadedAutomationResult("Gmail", result, formatGmailSnapshot));
+    }
+
+    if (/\b(calendar|schedule|agenda|events?)\b/.test(requestText)) {
+      const window = calendarOverviewWindow("today", automation.timezone || user.timezone);
+      const result = await this.executeReadOnlyAutomationTool(
+        automation,
+        user,
+        conversation,
+        "calendar_list_events",
+        {
+          timeMin: window.timeMin,
+          timeMax: window.timeMax,
+          maxResults: 50
+        }
+      );
+      sections.push(
+        formatPreloadedAutomationResult("Calendar", result, (data) =>
+          formatCalendarOverview(
+            (data as CalendarEventSummary[] | undefined) ?? [],
+            automation.timezone || user.timezone,
+            "today"
+          )
+        )
+      );
+    }
+
+    if (/\basana\b|\btasks?\b/.test(requestText)) {
+      const result = await this.executeReadOnlyAutomationTool(
+        automation,
+        user,
+        conversation,
+        "asana_list_my_tasks",
+        {
+          completed: false,
+          limit: 50,
+          sortBy: "due",
+          sortDirection: "asc"
+        }
+      );
+      sections.push(
+        formatPreloadedAutomationResult("Asana", result, (data) =>
+          formatScopedAsanaTaskList((data as AsanaTaskSummary[] | undefined) ?? [], {
+            label: "from My Tasks",
+            emptyLabel: "I don't see any open Asana tasks in My Tasks.",
+            emphasizeImportance: true
+          })
+        )
+      );
+    }
+
+    return sections;
+  }
+
+  private async executeReadOnlyAutomationTool(
+    automation: Automation,
+    user: User,
+    conversation: Conversation,
+    toolName: string,
+    toolInput: unknown
+  ): Promise<ToolExecutionResult> {
+    if (!isToolName(toolName) || !isReadOnlyTool(toolName) || toolName.startsWith("automation_")) {
+      return {
+        ok: false,
+        error: "AUTOMATION_WRITE_BLOCKED",
+        userMessage: "Scheduled automations can only use read-only tools."
+      };
+    }
+
+    const routedCall = routeAutomationToolCall(toolName, toolInput);
+    const routed = routedCall.toolName !== toolName || routedCall.input !== toolInput;
+    logger.info(
+      {
+        automationId: automation.id,
+        requestedToolName: toolName,
+        routedToolName: routedCall.toolName,
+        routed,
+        inputSummary: summarizeAutomationToolInput(routedCall.input)
+      },
+      "Automation tool call"
+    );
+
+    const result = await this.toolExecutor.executeToolCall(
+      routedCall.toolName,
+      routedCall.input,
+      {
+        user,
+        conversation,
+        latestUserMessage: automation.prompt
+      },
+      { force: true }
+    );
+    if (result.ok) {
+      logger.info(
+        {
+          automationId: automation.id,
+          requestedToolName: toolName,
+          routedToolName: routedCall.toolName
+        },
+        "Automation tool result"
+      );
+    } else {
+      logger.warn(
+        {
+          automationId: automation.id,
+          requestedToolName: toolName,
+          routedToolName: routedCall.toolName,
+          error: result.error,
+          userMessage: result.userMessage
+        },
+        "Automation tool result"
+      );
+    }
+    return result;
   }
 
   private async sendAutomationMessage(
@@ -330,6 +419,40 @@ export class AutomationScheduler {
 function formatAutomationDigest(name: string, body: string): string {
   const compactBody = stripRedundantDigestHeading(body.trim()) || "No summary was produced.";
   return `${name}\n\n${compactBody}`;
+}
+
+function formatPreloadedAutomationResult(
+  label: string,
+  result: ToolExecutionResult,
+  formatData: (data: unknown) => string
+): string {
+  if (!result.ok) {
+    return `${label}: unavailable. ${result.userMessage ?? result.error ?? "The read failed."}`;
+  }
+
+  return `${label}:\n${formatData(result.data)}`;
+}
+
+function formatGmailSnapshot(data: unknown): string {
+  if (!Array.isArray(data) || !data.length) {
+    return "No recent inbox threads found.";
+  }
+
+  const lines = data.slice(0, 10).map((thread, index) => {
+    const item = thread as {
+      subject?: unknown;
+      from?: unknown;
+      date?: unknown;
+      snippet?: unknown;
+    };
+    const subject = typeof item.subject === "string" && item.subject ? item.subject : "(No subject)";
+    const from = typeof item.from === "string" && item.from ? ` from ${item.from}` : "";
+    const date = typeof item.date === "string" && item.date ? ` at ${item.date}` : "";
+    const snippet = typeof item.snippet === "string" && item.snippet ? `: ${item.snippet}` : "";
+    return `${index + 1}. ${subject}${from}${date}${snippet}`;
+  });
+
+  return `Found ${data.length} recent inbox threads.\n${lines.join("\n")}`;
 }
 
 function routeAutomationToolCall(

@@ -9,6 +9,7 @@ import {
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest
 } from "../src/modules/agent/asanaReadShortcut";
 
@@ -17,6 +18,22 @@ describe("asana read shortcut", () => {
     expect(matchGenericAsanaMyTasksRequest("show my asana tasks due today")).toBe("today");
     expect(matchGenericAsanaMyTasksRequest("check my asana tasks due tomorrow")).toBe("tomorrow");
     expect(matchGenericAsanaMyTasksRequest("show tasks in project Scanis due today")).toBeNull();
+  });
+
+  it("matches generic open Asana task checks without stealing writes", () => {
+    expect(matchGenericAsanaOpenTasksRequest("check my asana")).toBe(true);
+    expect(matchGenericAsanaOpenTasksRequest("check all asana tasks")).toBe(true);
+    expect(matchGenericAsanaOpenTasksRequest("create a task saying test 1 due today")).toBe(false);
+    expect(matchGenericAsanaMyTasksRequest("create a task saying test 1 due today")).toBeNull();
+    expect(
+      matchAsanaListShortcut(
+        "create 5 test tasks due today",
+        [],
+        [],
+        "America/New_York",
+        new Date("2026-04-23T15:00:00.000Z")
+      )
+    ).toBeNull();
   });
 
   it("computes due dates in the user's timezone", () => {
