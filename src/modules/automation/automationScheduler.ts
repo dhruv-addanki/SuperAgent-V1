@@ -197,7 +197,7 @@ export class AutomationScheduler {
         (tool) => typeof tool.name !== "string" || !tool.name.startsWith("automation_")
       ),
       input: [{ role: "user", content: automationInput }],
-      executeTool: (toolName, toolInput) => {
+      executeTool: async (toolName, toolInput) => {
         if (
           !isToolName(toolName) ||
           !isReadOnlyTool(toolName) ||
@@ -210,7 +210,19 @@ export class AutomationScheduler {
           });
         }
         const routedCall = routeAutomationToolCall(toolName, toolInput);
-        return this.toolExecutor.executeToolCall(
+        const routed = routedCall.toolName !== toolName || routedCall.input !== toolInput;
+        logger.info(
+          {
+            automationId: automation.id,
+            requestedToolName: toolName,
+            routedToolName: routedCall.toolName,
+            routed,
+            inputSummary: summarizeAutomationToolInput(routedCall.input)
+          },
+          "Automation tool call"
+        );
+
+        const result = await this.toolExecutor.executeToolCall(
           routedCall.toolName,
           routedCall.input,
           {
@@ -220,6 +232,28 @@ export class AutomationScheduler {
           },
           { force: true }
         );
+        if (result.ok) {
+          logger.info(
+            {
+              automationId: automation.id,
+              requestedToolName: toolName,
+              routedToolName: routedCall.toolName
+            },
+            "Automation tool result"
+          );
+        } else {
+          logger.warn(
+            {
+              automationId: automation.id,
+              requestedToolName: toolName,
+              routedToolName: routedCall.toolName,
+              error: result.error,
+              userMessage: result.userMessage
+            },
+            "Automation tool result"
+          );
+        }
+        return result;
       },
       maxToolRounds: env.MAX_TOOL_ROUNDS,
       continueAfterToolMessages: true
@@ -302,12 +336,12 @@ function routeAutomationToolCall(
   toolName: string,
   input: unknown
 ): { toolName: string; input: unknown } {
-  if (toolName !== "asana_list_project_tasks") {
+  if (toolName !== "asana_list_project_tasks" && toolName !== "asana_list_my_tasks") {
     return { toolName, input };
   }
 
   const inputObject = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  if (looksLikeAsanaGid(inputObject.projectGid)) {
+  if (!inputObject.projectGid || looksLikeAsanaGid(inputObject.projectGid)) {
     return { toolName, input };
   }
 
@@ -322,6 +356,32 @@ function routeAutomationToolCall(
       sortDirection: inputObject.sortDirection ?? "asc"
     }
   };
+}
+
+function summarizeAutomationToolInput(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== "object") return {};
+  const inputObject = input as Record<string, unknown>;
+  const safeKeys = [
+    "calendarId",
+    "timeMin",
+    "timeMax",
+    "maxResults",
+    "workspaceGid",
+    "projectGid",
+    "completed",
+    "dueOn",
+    "dueBefore",
+    "limit",
+    "sortBy",
+    "sortDirection",
+    "query"
+  ];
+
+  return Object.fromEntries(
+    safeKeys
+      .filter((key) => inputObject[key] !== undefined)
+      .map((key) => [key, inputObject[key]])
+  );
 }
 
 function looksLikeAsanaGid(value: unknown): boolean {

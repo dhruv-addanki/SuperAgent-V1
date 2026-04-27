@@ -142,6 +142,26 @@ describe("automation scheduler", () => {
       }),
       { force: true }
     );
+    executeToolCallSpy.mockClear();
+    await runResponseLoopMock.mock.calls[0][0].executeTool("asana_list_my_tasks", {
+      projectGid: "My Tasks",
+      limit: 10
+    });
+    const cleanedMyTasksInput = executeToolCallSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.objectContaining({
+        completed: false,
+        limit: 10,
+        sortBy: "due",
+        sortDirection: "asc"
+      }),
+      expect.objectContaining({
+        latestUserMessage: "Summarize important emails and list calendar events."
+      }),
+      { force: true }
+    );
+    expect(cleanedMyTasksInput.projectGid).toBeUndefined();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "Morning brief\n\nHere is your morning brief."
