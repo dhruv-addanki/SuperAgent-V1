@@ -28,7 +28,7 @@ import {
 } from "./approvalPolicy";
 import { getOrCreateWhatsAppConversation, persistMessage } from "./conversationState";
 import { buildSystemPrompt } from "./systemPrompt";
-import { ToolExecutor } from "./toolExecutor";
+import { ToolExecutor, type ToolExecutionResult } from "./toolExecutor";
 import { getAvailableToolDefinitions } from "./toolRegistry";
 import { extractOutputText, runResponseLoop } from "./responseLoop";
 import {
@@ -266,6 +266,53 @@ export class AgentOrchestrator {
           latestUserMessage: preparedInput.text
         });
         if (handled) return;
+      }
+
+      const missingAutomationRetry = matchMissingAutomationDigestRetry(preparedInput.text, history);
+      if (shouldUseTextShortcuts && missingAutomationRetry) {
+        const calendarWindow = calendarOverviewWindow("today", user.timezone);
+        const [calendarResult, asanaResult] = await Promise.all([
+          missingAutomationRetry.calendar
+            ? this.toolExecutor.executeToolCall(
+                "calendar_list_events",
+                {
+                  timeMin: calendarWindow.timeMin,
+                  timeMax: calendarWindow.timeMax,
+                  maxResults: 50
+                },
+                {
+                  user,
+                  conversation,
+                  latestUserMessage: preparedInput.text
+                }
+              )
+            : Promise.resolve(null),
+          missingAutomationRetry.asana
+            ? this.toolExecutor.executeToolCall(
+                "asana_list_my_tasks",
+                {
+                  completed: false,
+                  limit: 20,
+                  sortBy: "due",
+                  sortDirection: "asc"
+                },
+                {
+                  user,
+                  conversation,
+                  latestUserMessage: preparedInput.text
+                }
+              )
+            : Promise.resolve(null)
+        ]);
+
+        await replyToUser(
+          formatMissingAutomationRetryReply({
+            calendarResult,
+            asanaResult,
+            timezone: user.timezone
+          })
+        );
+        return;
       }
 
       const ambiguousBulkComplete = matchAmbiguousAsanaBulkCompleteRequest(
@@ -772,6 +819,111 @@ function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {
 function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): string {
   const hint = formatSetupHintForWhatsApp(setupStatus);
   return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
+
+function matchMissingAutomationDigestRetry(
+  text: string,
+  history: ResponseInputItem[]
+): { calendar: boolean; asana: boolean } | null {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").trim();
+  const asksRetry =
+    /^(yes|yep|yeah|sure|ok|okay)\b.*\b(retry|try again|missing|calendar|asana|parts?)\b/.test(
+      normalized
+    ) || /\b(retry|try again)\b.*\b(missing|calendar|asana|parts?)\b/.test(normalized);
+  if (!asksRetry) return null;
+
+  const previousAssistant = lastAssistantMessage(history);
+  if (!previousAssistant) return null;
+  const previous = previousAssistant.toLowerCase();
+  if (!/morning digest|automation|digest/.test(previous)) return null;
+
+  const calendar =
+    /\bcalendar\b/.test(previous) &&
+    /\b(couldn'?t|could not|unavailable|failed|missing|unable|reach)\b/.test(previous);
+  const asana =
+    /\basana\b/.test(previous) &&
+    /\b(couldn'?t|could not|unavailable|failed|missing|unable|issue|rejected|resolution)\b/.test(
+      previous
+    );
+
+  if (!calendar && !asana) return null;
+  return { calendar, asana };
+}
+
+function formatMissingAutomationRetryReply(input: {
+  calendarResult: ToolExecutionResult | null;
+  asanaResult: ToolExecutionResult | null;
+  timezone: string;
+}): string {
+  const sections = ["Retried the missing parts."];
+
+  if (input.calendarResult) {
+    if (input.calendarResult.ok) {
+      sections.push(
+        formatCalendarOverview(
+          (input.calendarResult.data as CalendarEventSummary[] | undefined) ?? [],
+          input.timezone,
+          "today"
+        )
+      );
+    } else {
+      sections.push(
+        `Calendar: ${
+          input.calendarResult.userMessage ??
+          "I still couldn't reach Google Calendar, so today's schedule is unavailable."
+        }`
+      );
+    }
+  }
+
+  if (input.asanaResult) {
+    if (input.asanaResult.ok) {
+      sections.push(
+        [
+          "Asana:",
+          formatScopedAsanaTaskList(
+            (input.asanaResult.data as AsanaTaskSummary[] | undefined) ?? [],
+            {
+              label: "from My Tasks",
+              emptyLabel: "I don't see any open Asana tasks in My Tasks.",
+              emphasizeImportance: true
+            }
+          )
+        ].join("\n")
+      );
+    } else {
+      sections.push(
+        `Asana: ${
+          input.asanaResult.userMessage ?? "I still couldn't load your Asana My Tasks in this run."
+        }`
+      );
+    }
+  }
+
+  return sections.join("\n\n");
+}
+
+function lastAssistantMessage(history: ResponseInputItem[]): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index];
+    if (item?.role !== "assistant") continue;
+    const text = textFromResponseInputItem(item);
+    if (text) return text;
+  }
+  return null;
+}
+
+function textFromResponseInputItem(item: ResponseInputItem): string {
+  if (typeof item.content === "string") return item.content;
+  if (!Array.isArray(item.content)) return "";
+  return item.content
+    .map((part) => {
+      if (typeof part?.text === "string") return part.text;
+      if (typeof part?.output_text === "string") return part.output_text;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function isResponsePreferenceOnlyMessage(
