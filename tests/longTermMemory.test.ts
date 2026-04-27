@@ -9,10 +9,7 @@ describe("long term memory", () => {
       user: { update: vi.fn() }
     } as any);
 
-    await service.maybeExtractMemoryFromConversation(
-      { id: "user_1" },
-      "my name is Dhruv"
-    );
+    await service.maybeExtractMemoryFromConversation({ id: "user_1" }, "my name is Dhruv");
 
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -48,6 +45,38 @@ describe("long term memory", () => {
             verbosity: "concise",
             tone: "direct"
           },
+          confidence: 0.8
+        }
+      })
+    );
+  });
+
+  it("stores configurable personality and style preferences", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "from now on use a warm casual style, sound like a person, no em dashes, and dont use - in text casually"
+    );
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "assistant_response_preferences" } },
+        update: {
+          value: expect.objectContaining({
+            tone: "casual",
+            style: "warm casual",
+            humanLike: true,
+            avoidEmDashes: true,
+            avoidHyphenSeparators: true
+          }),
           confidence: 0.8
         }
       })

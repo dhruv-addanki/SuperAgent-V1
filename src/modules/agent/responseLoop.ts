@@ -23,6 +23,7 @@ export interface ResponseLoopInput {
   input: ResponseInputItem[];
   executeTool: (toolName: string, input: unknown) => Promise<ToolExecutionResult>;
   maxToolRounds?: number;
+  continueAfterToolMessages?: boolean;
 }
 
 export interface ResponseLoopResult {
@@ -62,8 +63,7 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
 
     if (toolRounds >= maxToolRounds) {
       return {
-        assistantMessage:
-          "I couldn't finish that cleanly in one pass. Try a narrower follow-up.",
+        assistantMessage: "I couldn't finish that cleanly in one pass. Try a narrower follow-up.",
         toolRounds,
         stoppedForMaxRounds: true
       };
@@ -72,7 +72,7 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
     currentInput = currentInput.concat((response.output ?? []) as ResponseInputItem[]);
     const executedCalls = await executeToolBatch(calls, input.executeTool);
 
-    if (executedCalls.length === 1) {
+    if (!input.continueAfterToolMessages && executedCalls.length === 1) {
       const { result } = executedCalls[0]!;
 
       if (result.userMessage && result.stopAfterTool) {
@@ -89,7 +89,7 @@ export async function runResponseLoop(input: ResponseLoopInput): Promise<Respons
           stoppedForApproval: result.approvalRequired
         };
       }
-    } else {
+    } else if (!input.continueAfterToolMessages) {
       const shouldReturnBatchSummary = executedCalls.some(
         ({ result }) => result.stopAfterTool || result.approvalRequired || !result.ok
       );
@@ -211,7 +211,8 @@ function formatBatchStatusMessage(executedCalls: ExecutedToolCall[]): string {
 
   const sections: string[] = [];
   if (completed.length) sections.push(formatStatusSection("Completed:", completed));
-  if (needsAttention.length) sections.push(formatStatusSection("Needs confirmation:", needsAttention));
+  if (needsAttention.length)
+    sections.push(formatStatusSection("Needs confirmation:", needsAttention));
   if (failed.length) sections.push(formatStatusSection("Couldn't complete:", failed));
   return sections.join("\n\n") || "Done.";
 }

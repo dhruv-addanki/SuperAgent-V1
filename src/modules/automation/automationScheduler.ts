@@ -13,6 +13,7 @@ import { env } from "../../config/env";
 import { logger } from "../../config/logger";
 import type { ResponsesClient } from "../../lib/openaiClient";
 import { serializeError, UserFacingError, userMessageForError } from "../../lib/errors";
+import { normalizeAssistantMessageForUser } from "../../lib/messageText";
 import { buildToolDefinitions, isReadOnlyTool, isToolName } from "../../schemas/toolSchemas";
 import { AsanaTokenService } from "../asana/tokenService";
 import { GoogleTokenService } from "../google/tokenService";
@@ -23,18 +24,12 @@ import {
   buildConversationContext,
   formatConversationContextForPrompt
 } from "../agent/conversationContext";
-import {
-  getOrCreateWhatsAppConversation,
-  persistMessage
-} from "../agent/conversationState";
+import { getOrCreateWhatsAppConversation, persistMessage } from "../agent/conversationState";
 import { runResponseLoop } from "../agent/responseLoop";
 import { buildSystemPrompt } from "../agent/systemPrompt";
 import { ToolExecutor } from "../agent/toolExecutor";
 import { WhatsAppService } from "../whatsapp/whatsappService";
-import {
-  AutomationService,
-  type ClaimedAutomation
-} from "./automationService";
+import { AutomationService, type ClaimedAutomation } from "./automationService";
 
 interface AutomationSchedulerOptions {
   pollIntervalSeconds?: number;
@@ -69,8 +64,7 @@ export class AutomationScheduler {
     );
     this.longTermMemory = new LongTermMemory(prisma);
     this.setupStatusService = new SetupStatusService(prisma);
-    this.pollIntervalSeconds =
-      options.pollIntervalSeconds ?? env.AUTOMATION_POLL_INTERVAL_SECONDS;
+    this.pollIntervalSeconds = options.pollIntervalSeconds ?? env.AUTOMATION_POLL_INTERVAL_SECONDS;
     this.batchSize = options.batchSize ?? env.AUTOMATION_BATCH_SIZE;
     this.workerId = options.workerId ?? `automation-${process.pid}-${crypto.randomUUID()}`;
   }
@@ -130,7 +124,9 @@ export class AutomationScheduler {
         automation.conversation ??
         (await getOrCreateWhatsAppConversation(this.prisma, automation.userId));
       const result = await this.executeAutomationPrompt(automation, automation.user, conversation);
-      outputText = formatAutomationDigest(automation.name, result.assistantMessage);
+      outputText = normalizeAssistantMessageForUser(
+        formatAutomationDigest(automation.name, result.assistantMessage)
+      );
 
       await persistMessage(this.prisma, {
         conversationId: conversation.id,
@@ -146,7 +142,9 @@ export class AutomationScheduler {
       });
     } catch (error) {
       const errorMessage = userMessageForError(error);
-      const failureText = `Automation "${automation.name}" failed: ${errorMessage}`;
+      const failureText = normalizeAssistantMessageForUser(
+        `Automation "${automation.name}" failed: ${errorMessage}`
+      );
       await this.trySendFailure(automation.user, automation.conversation, failureText);
       await this.automationService.markRunFailed({
         automation,
@@ -192,14 +190,19 @@ export class AutomationScheduler {
         "Scheduled automation mode:",
         "- Only use read-only information tools.",
         "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
-        "- If a requested source is unavailable, include that briefly in the digest."
+        "- If a requested source is unavailable, include that briefly in the digest.",
+        "- For Asana planning based on the user's own work, use asana_list_my_tasks. Do not call asana_list_project_tasks unless you have a real projectGid from recent context or asana_list_projects."
       ].join("\n"),
       tools: buildToolDefinitions(true).filter(
         (tool) => typeof tool.name !== "string" || !tool.name.startsWith("automation_")
       ),
       input: [{ role: "user", content: automationInput }],
       executeTool: (toolName, toolInput) => {
-        if (!isToolName(toolName) || !isReadOnlyTool(toolName) || toolName.startsWith("automation_")) {
+        if (
+          !isToolName(toolName) ||
+          !isReadOnlyTool(toolName) ||
+          toolName.startsWith("automation_")
+        ) {
           return Promise.resolve({
             ok: false,
             error: "AUTOMATION_WRITE_BLOCKED",
@@ -217,7 +220,8 @@ export class AutomationScheduler {
           { force: true }
         );
       },
-      maxToolRounds: env.MAX_TOOL_ROUNDS
+      maxToolRounds: env.MAX_TOOL_ROUNDS,
+      continueAfterToolMessages: true
     });
   }
 
@@ -226,8 +230,9 @@ export class AutomationScheduler {
     conversation: Conversation,
     message: string
   ): Promise<void> {
+    const safeMessage = normalizeAssistantMessageForUser(message);
     if (this.options.forceTextDelivery || (await this.hasRecentInboundMessage(user.id))) {
-      await this.whatsappService.sendTextMessage(user.whatsappPhone, message);
+      await this.whatsappService.sendTextMessage(user.whatsappPhone, safeMessage);
       return;
     }
 
@@ -243,7 +248,7 @@ export class AutomationScheduler {
       to: user.whatsappPhone,
       templateName: env.WHATSAPP_AUTOMATION_TEMPLATE_NAME,
       languageCode: env.WHATSAPP_AUTOMATION_TEMPLATE_LANGUAGE,
-      bodyParameters: [message]
+      bodyParameters: [safeMessage]
     });
 
     await this.prisma.conversation.update({
@@ -258,14 +263,15 @@ export class AutomationScheduler {
     message: string
   ): Promise<void> {
     try {
+      const safeMessage = normalizeAssistantMessageForUser(message);
       const targetConversation =
         conversation ?? (await getOrCreateWhatsAppConversation(this.prisma, user.id));
       await persistMessage(this.prisma, {
         conversationId: targetConversation.id,
         role: MessageRole.ASSISTANT,
-        content: message
+        content: safeMessage
       });
-      await this.sendAutomationMessage(user, targetConversation, message);
+      await this.sendAutomationMessage(user, targetConversation, safeMessage);
     } catch (error) {
       logger.warn({ error, userId: user.id }, "Failed to send automation failure notice");
     }

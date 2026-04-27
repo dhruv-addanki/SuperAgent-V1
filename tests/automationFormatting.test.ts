@@ -22,7 +22,7 @@ describe("automation formatting", () => {
       runnerEnabled: false
     });
 
-    expect(message).toContain("overdue; automation runner is disabled");
+    expect(message).toContain("Overdue: automation runner is disabled.");
   });
 
   it("flags overdue automations that are waiting for the runner", () => {
@@ -31,6 +31,6 @@ describe("automation formatting", () => {
       runnerEnabled: true
     });
 
-    expect(message).toContain("overdue; waiting for runner");
+    expect(message).toContain("Overdue: waiting for runner.");
   });
 });

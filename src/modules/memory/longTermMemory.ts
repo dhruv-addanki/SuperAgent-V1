@@ -3,13 +3,19 @@ import type { PromptMemoryEntry } from "../agent/conversationContext";
 
 interface MemoryExtractionResult {
   timezone?: string;
+  responsePreferences?: AssistantResponsePreferences;
 }
 
-interface AssistantResponsePreferences {
+export interface AssistantResponsePreferences {
   verbosity?: "concise" | "detailed";
-  tone?: "direct" | "friendly" | "formal";
+  tone?: "direct" | "friendly" | "formal" | "casual" | "warm" | "professional" | "calm" | "playful";
   format?: "bullets" | "prose";
   minimalFollowUps?: boolean;
+  humanLike?: boolean;
+  avoidEmDashes?: boolean;
+  avoidHyphenSeparators?: boolean;
+  style?: string;
+  personality?: string;
 }
 
 export class LongTermMemory {
@@ -78,6 +84,7 @@ export class LongTermMemory {
     const responsePreferences = extractAssistantResponsePreferences(text);
     if (Object.keys(responsePreferences).length) {
       await this.rememberAssistantResponsePreferences(user.id, responsePreferences);
+      result.responsePreferences = responsePreferences;
     }
 
     const toneMatch = text.match(
@@ -202,16 +209,18 @@ function extractPreferredName(text: string): string | null {
 }
 
 function extractTimezone(text: string): string | null {
-  const match = text.match(/\b(?:my timezone is|set my timezone to|use timezone) ([A-Za-z_/-]+)\b/i);
+  const match = text.match(
+    /\b(?:my timezone is|set my timezone to|use timezone) ([A-Za-z_/-]+)\b/i
+  );
   return match?.[1] ?? null;
 }
 
 function extractAssistantResponsePreferences(text: string): AssistantResponsePreferences {
   const normalized = text.toLowerCase().replace(/[’]/g, "'");
   const hasPreferenceSignal =
-    /\b(prefer|use|keep|be|make|answer|reply|respond|responses?|replies|style)\b/.test(
+    /\b(prefer|use|keep|be|make|answer|reply|respond|responses?|replies|style|tone|voice|vibe|personality|sound|talk|speak|write)\b/.test(
       normalized
-    );
+    ) || /\bem\s*dashes?\b|\bemdashes?\b|—|\bin text casually\b/.test(normalized);
   if (!hasPreferenceSignal) return {};
 
   const preferences: AssistantResponsePreferences = {};
@@ -227,6 +236,16 @@ function extractAssistantResponsePreferences(text: string): AssistantResponsePre
     preferences.tone = "friendly";
   } else if (/\bformal\b/.test(normalized)) {
     preferences.tone = "formal";
+  } else if (/\bcasual\b/.test(normalized)) {
+    preferences.tone = "casual";
+  } else if (/\bwarm\b/.test(normalized)) {
+    preferences.tone = "warm";
+  } else if (/\bprofessional\b/.test(normalized)) {
+    preferences.tone = "professional";
+  } else if (/\bcalm\b/.test(normalized)) {
+    preferences.tone = "calm";
+  } else if (/\bplayful\b/.test(normalized)) {
+    preferences.tone = "playful";
   }
 
   if (/\b(bullets?|bullet points?|lists?)\b/.test(normalized)) {
@@ -243,7 +262,84 @@ function extractAssistantResponsePreferences(text: string): AssistantResponsePre
     preferences.minimalFollowUps = true;
   }
 
+  if (
+    /\bhuman[-\s]?like\b/.test(normalized) ||
+    /\bmore natural\b/.test(normalized) ||
+    /\bless robotic\b/.test(normalized) ||
+    /\bsound like (?:a )?(?:real )?person\b/.test(normalized)
+  ) {
+    preferences.humanLike = true;
+  }
+
+  if (
+    /\b(?:no|avoid|don't use|do not use|never use)\s+(?:em\s*dashes?|emdashes?|—)\b/.test(
+      normalized
+    )
+  ) {
+    preferences.avoidEmDashes = true;
+  }
+
+  if (
+    /\b(?:no|avoid|don't use|do not use|dont use|never use)\s+(?:casual\s+)?(?:hyphens?|dashes?|-)\b/.test(
+      normalized
+    ) ||
+    /\b(?:hyphens?|dashes?)\s+in text casually\b/.test(normalized) ||
+    /(?:^|\s)-\s+in text casually\b/.test(normalized) ||
+    /\b(?:don't use|do not use|dont use|never use)\s+-\s+/.test(normalized)
+  ) {
+    preferences.avoidHyphenSeparators = true;
+  }
+
+  const style = extractStylePreference(text);
+  if (style) preferences.style = style;
+
+  const personality = extractPersonalityPreference(text);
+  if (personality) preferences.personality = personality;
+
   return preferences;
+}
+
+function extractStylePreference(text: string): string | null {
+  const patterns = [
+    /\b(?:use|match|switch to|set|make)\s+(?:a\s+)?([^.!?\n]{2,120}?)\s+(?:style|tone|voice|vibe)\b/i,
+    /\b(?:respond|reply|talk|speak|write|sound)\s+(?:more\s+)?(?:like|in)\s+(?:a\s+)?([^.!?\n]{2,120})(?:[.!?\n]|$)/i,
+    /\b(?:set|change)\s+(?:your\s+)?(?:style|tone|voice|vibe)\s+(?:to|as|like)\s+([^.!?\n]{2,120})(?:[.!?\n]|$)/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const normalized = normalizeStyleText(match?.[1] ?? "");
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function extractPersonalityPreference(text: string): string | null {
+  const patterns = [
+    /\b(?:set|change)\s+(?:your\s+)?personality\s+(?:to|as|like)\s+([^.!?\n]{2,120})(?:[.!?\n]|$)/i,
+    /\b(?:your\s+)?personality\s+(?:should be|is)\s+([^.!?\n]{2,120})(?:[.!?\n]|$)/i,
+    /\b(?:be|act)\s+(?:more\s+)?([^.!?\n]{2,120}?)\s+(?:as an assistant|when you reply|in replies)\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const normalized = normalizeStyleText(match?.[1] ?? "");
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function normalizeStyleText(value: string): string | null {
+  const normalized = value
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\bplease\b\.?$/i, "")
+    .replace(/[.!?,:;]+$/g, "")
+    .trim();
+  if (!normalized || normalized.length > 120) return null;
+  if (!/[A-Za-z]/.test(normalized)) return null;
+  return normalized;
 }
 
 function normalizeName(name: string): string | null {

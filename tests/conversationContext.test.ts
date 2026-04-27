@@ -41,9 +41,7 @@ describe("conversation context", () => {
     });
 
     expect(context.activeApp).toBe("docs");
-    expect(context.activeEntities).toEqual([
-      "Google Doc: Strategy Notes (documentId: doc_123)"
-    ]);
+    expect(context.activeEntities).toEqual(["Google Doc: Strategy Notes (documentId: doc_123)"]);
     expect(context.recentResults).toEqual(["Current Google Doc: Strategy Notes."]);
     expect(context.communicationHints.join("\n")).toContain("delete it");
     expect(context.communicationHints.join("\n")).toContain("drive_delete_file");
@@ -172,9 +170,7 @@ describe("conversation context", () => {
     });
 
     expect(context.activeApp).toBe("notion");
-    expect(context.activeEntities).toEqual([
-      "Notion page: Launch Notes (pageId: page_1)"
-    ]);
+    expect(context.activeEntities).toEqual(["Notion page: Launch Notes (pageId: page_1)"]);
     expect(context.recentResults).toEqual(["Current Notion page: Launch Notes."]);
     expect(context.communicationHints[0]).toContain("same Notion page");
   });
@@ -225,7 +221,12 @@ describe("conversation context", () => {
             verbosity: "concise",
             tone: "direct",
             format: "bullets",
-            minimalFollowUps: true
+            minimalFollowUps: true,
+            humanLike: true,
+            avoidEmDashes: true,
+            avoidHyphenSeparators: true,
+            style: "warm casual",
+            personality: "calm operator"
           },
           updatedAt: new Date()
         }
@@ -240,7 +241,7 @@ describe("conversation context", () => {
     expect(formatted).toContain("Preferred name: Dhruv");
     expect(formatted).toContain("Connected integrations: Google (dhruv@gmail.com)");
     expect(formatted).toContain(
-      "Response preferences: concise, direct, bullets, minimal follow-ups"
+      "Response preferences: concise, direct, bullets, minimal follow-ups, human-like, no em dashes, no casual dash separators, style: warm casual, personality: calm operator"
     );
   });
 });

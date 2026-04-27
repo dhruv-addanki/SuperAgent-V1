@@ -1,3 +1,4 @@
+import { MessageRole } from "@prisma/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runResponseLoopMock = vi.fn();
@@ -75,6 +76,121 @@ describe("agent orchestrator", () => {
     );
     expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
       "Structured conversation context:"
+    );
+  });
+
+  it("normalizes assistant replies before persisting and sending", async () => {
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "Done — booked.",
+      toolRounds: 0
+    });
+
+    const messageCreate = vi.fn(async () => undefined);
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: messageCreate,
+        findMany: vi.fn(async () => [
+          { role: MessageRole.USER, content: "previous message" },
+          { role: MessageRole.ASSISTANT, content: "previous reply" }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "reply normally"
+    });
+
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith("+15555550100", "Done, booked.");
+    expect(messageCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          content: "Done, booked."
+        })
+      })
+    );
+  });
+
+  it("acknowledges response style configuration without calling the model", async () => {
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined)
+      },
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 }))
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "from now on be casual and dont use - in text casually"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Got it. I'll keep replies casual, no casual dash separators."
     );
   });
 
@@ -241,9 +357,7 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      expect.stringMatching(
-        /^Connect Notion first: .*\/auth\/notion\/start\?phone=%2B15555550100$/
-      )
+      expect.stringMatching(/^Connect Notion first: .*\/auth\/notion\/start\?phone=%2B15555550100$/)
     );
   });
 
@@ -353,9 +467,7 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      expect.stringMatching(
-        /^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/
-      )
+      expect.stringMatching(/^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/)
     );
   });
 
@@ -408,9 +520,7 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      expect.stringMatching(
-        /^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/
-      )
+      expect.stringMatching(/^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/)
     );
   });
 
@@ -465,9 +575,7 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      expect.stringMatching(
-        /^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/
-      )
+      expect.stringMatching(/^Connect Asana first: .*\/auth\/asana\/start\?phone=%2B15555550100$/)
     );
   });
 
@@ -530,8 +638,7 @@ describe("agent orchestrator", () => {
 
   it("routes recurring multi-app requests through the model with automation instructions", async () => {
     runResponseLoopMock.mockResolvedValue({
-      assistantMessage:
-        "Create automation \"Morning brief\"? Reply yes to create it, or cancel.",
+      assistantMessage: 'Create automation "Morning brief"? Reply yes to create it, or cancel.',
       toolRounds: 0,
       stoppedForApproval: true
     });
@@ -589,15 +696,13 @@ describe("agent orchestrator", () => {
     });
 
     expect(runResponseLoopMock).toHaveBeenCalledOnce();
-    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
-      "use automation_create"
-    );
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain("use automation_create");
     expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain(
       "Active app/workflow: multi"
     );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Create automation \"Morning brief\"? Reply yes to create it, or cancel."
+      'Create automation "Morning brief"? Reply yes to create it, or cancel.'
     );
   });
 
@@ -746,9 +851,7 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      expect.stringMatching(
-        /^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/
-      )
+      expect.stringMatching(/^Connect Google first: .*\/auth\/google\/start\?phone=%2B15555550100$/)
     );
   });
 
@@ -1411,9 +1514,7 @@ describe("agent orchestrator", () => {
       },
       message: {
         create: vi.fn(async () => undefined),
-        findMany: vi.fn(async () => [
-          { role: "USER", content: "what does that screenshot say?" }
-        ])
+        findMany: vi.fn(async () => [{ role: "USER", content: "what does that screenshot say?" }])
       },
       memoryEntry: {
         findMany: vi.fn(async () => [
@@ -1860,7 +1961,7 @@ describe("agent orchestrator", () => {
           {
             role: "ASSISTANT",
             content:
-              "Across all calendars today:\n• All day — Systems Class Ex4 Due (Dhruv's tasks - My workspace (via Asana))"
+              "Across all calendars today:\n• All day: Systems Class Ex4 Due (Dhruv's tasks - My workspace (via Asana))"
           }
         ])
       },
@@ -1917,7 +2018,10 @@ describe("agent orchestrator", () => {
       message: {
         create: vi.fn(async () => undefined),
         findMany: vi.fn(async () => [
-          { role: "assistant", content: "Here are the open Asana tasks in Scanis:\n\n1. test 1\n2. test 2" }
+          {
+            role: "assistant",
+            content: "Here are the open Asana tasks in Scanis:\n\n1. test 1\n2. test 2"
+          }
         ])
       },
       memoryEntry: {
@@ -1993,9 +2097,7 @@ describe("agent orchestrator", () => {
       },
       message: {
         create: vi.fn(async () => undefined),
-        findMany: vi.fn(async () => [
-          { role: "assistant", content: "Earlier Asana reply" }
-        ])
+        findMany: vi.fn(async () => [{ role: "assistant", content: "Earlier Asana reply" }])
       },
       memoryEntry: {
         findMany: vi.fn(async () => [
@@ -2079,7 +2181,10 @@ describe("agent orchestrator", () => {
       message: {
         create: vi.fn(async () => undefined),
         findMany: vi.fn(async () => [
-          { role: "assistant", content: "Here are the open Asana tasks in Scanis:\n\n1. test 1\n2. test 2" }
+          {
+            role: "assistant",
+            content: "Here are the open Asana tasks in Scanis:\n\n1. test 1\n2. test 2"
+          }
         ])
       },
       memoryEntry: {

@@ -67,9 +67,7 @@ export function formatCalendarOverview(
     return `Across all calendars ${label}, you're clear.`;
   }
 
-  const body = events
-    .map((event) => `• ${formatEventLine(event, timezone)}`)
-    .join("\n");
+  const body = events.map((event) => `• ${formatEventLine(event, timezone)}`).join("\n");
 
   return `Across all calendars ${label}:\n${body}`;
 }
@@ -91,7 +89,7 @@ function startOfDayOffsetIso(timezone: string, offsetDays: number, baseDate: Dat
 function formatEventLine(event: CalendarEventSummary, timezone: string): string {
   const timeRange = formatTimeRange(event, timezone);
   const calendarSuffix = event.calendarSummary ? ` (${event.calendarSummary})` : "";
-  return `${timeRange} — ${event.title}${calendarSuffix}`;
+  return `${timeRange}: ${event.title}${calendarSuffix}`;
 }
 
 function formatTimeRange(event: CalendarEventSummary, timezone: string): string {

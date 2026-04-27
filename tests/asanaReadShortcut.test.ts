@@ -101,7 +101,7 @@ describe("asana read shortcut", () => {
       {
         role: "assistant",
         content:
-          "Across all calendars today:\n• All day — Systems Class Ex4 Due (Dhruv's tasks - My workspace (via Asana))"
+          "Across all calendars today:\n• All day: Systems Class Ex4 Due (Dhruv's tasks - My workspace (via Asana))"
       }
     ];
 
@@ -142,19 +142,16 @@ describe("asana read shortcut", () => {
   });
 
   it("detects ambiguous bulk-complete requests from recent task context", () => {
-    const match = matchAmbiguousAsanaBulkCompleteRequest(
-      "Mark all tasks as complete",
-      [
-        {
-          key: "recent_asana_tasks",
-          value: [
-            { taskGid: "task_1", name: "test 1", projectName: "Scanis" },
-            { taskGid: "task_2", name: "test 2", projectName: "Scanis" }
-          ],
-          updatedAt: new Date("2026-04-23T15:00:00.000Z")
-        }
-      ] as any
-    );
+    const match = matchAmbiguousAsanaBulkCompleteRequest("Mark all tasks as complete", [
+      {
+        key: "recent_asana_tasks",
+        value: [
+          { taskGid: "task_1", name: "test 1", projectName: "Scanis" },
+          { taskGid: "task_2", name: "test 2", projectName: "Scanis" }
+        ],
+        updatedAt: new Date("2026-04-23T15:00:00.000Z")
+      }
+    ] as any);
 
     expect(match).toEqual({
       taskCount: 2,

@@ -86,11 +86,7 @@ function mentionsExplicitDueTime(latestUserMessage: string): boolean {
   return TIME_OF_DAY_PATTERN.test(latestUserMessage);
 }
 
-function normalizeAsanaWriteInput(
-  toolName: ToolName,
-  input: any,
-  latestUserMessage: string
-): any {
+function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMessage: string): any {
   if (toolName !== "asana_create_task" && toolName !== "asana_update_task") {
     return input;
   }
@@ -296,10 +292,7 @@ export class ToolExecutor {
     });
   }
 
-  private async rememberRecentDriveFiles(
-    userId: string,
-    files: DriveFileSummary[]
-  ): Promise<void> {
+  private async rememberRecentDriveFiles(userId: string, files: DriveFileSummary[]): Promise<void> {
     const normalizedFiles = files
       .filter((file) => file.id)
       .slice(0, 10)
@@ -332,9 +325,7 @@ export class ToolExecutor {
     userId: string,
     files: DriveFileSummary[]
   ): Promise<void> {
-    const googleDocs = files.filter(
-      (file) => file.id && file.mimeType === GOOGLE_DOC_MIME_TYPE
-    );
+    const googleDocs = files.filter((file) => file.id && file.mimeType === GOOGLE_DOC_MIME_TYPE);
     if (googleDocs.length !== 1) return;
 
     const doc = googleDocs[0]!;
@@ -345,10 +336,7 @@ export class ToolExecutor {
     });
   }
 
-  private async forgetRecentGoogleDocIfDeleted(
-    userId: string,
-    fileId: string
-  ): Promise<void> {
+  private async forgetRecentGoogleDocIfDeleted(userId: string, fileId: string): Promise<void> {
     const delegate = (this.prisma as any).memoryEntry;
     if (!delegate?.findUnique || !delegate?.delete) return;
 
@@ -401,10 +389,7 @@ export class ToolExecutor {
     });
   }
 
-  private async rememberRecentNotionPage(
-    userId: string,
-    page: NotionPageSummary
-  ): Promise<void> {
+  private async rememberRecentNotionPage(userId: string, page: NotionPageSummary): Promise<void> {
     await this.prisma.memoryEntry.upsert({
       where: { userId_key: { userId, key: "recent_notion_page" } },
       update: {
@@ -459,10 +444,7 @@ export class ToolExecutor {
     });
   }
 
-  private async rememberRecentAsanaTasks(
-    userId: string,
-    tasks: AsanaTaskSummary[]
-  ): Promise<void> {
+  private async rememberRecentAsanaTasks(userId: string, tasks: AsanaTaskSummary[]): Promise<void> {
     const normalizedTasks = tasks.slice(0, 10).map((task) => ({
       taskGid: task.gid,
       name: task.name,
@@ -542,10 +524,7 @@ export class ToolExecutor {
     });
   }
 
-  private async rememberRecentAsanaTeams(
-    userId: string,
-    teams: AsanaTeamSummary[]
-  ): Promise<void> {
+  private async rememberRecentAsanaTeams(userId: string, teams: AsanaTeamSummary[]): Promise<void> {
     const normalizedTeams = teams.slice(0, 20).map((team) => ({
       teamGid: team.gid,
       name: team.name,
@@ -946,17 +925,17 @@ export class ToolExecutor {
                 ? ["projects:read", "workspaces:read", "teams:read"]
                 : toolName === "asana_list_teams"
                   ? ["teams:read", "workspaces:read"]
-                : toolName === "asana_list_users"
-                  ? ["users:read", "workspaces:read"]
-                  : toolName === "asana_list_project_tasks"
-                  ? ["tasks:read", "projects:read"]
-                  : toolName === "asana_delete_task"
-                    ? ["tasks:delete", "tasks:read"]
-                  : toolName === "asana_create_task"
-                    ? ["tasks:write"]
-                    : toolName === "asana_update_task"
-                      ? ["tasks:write", "tasks:read"]
-                    : ["tasks:read"],
+                  : toolName === "asana_list_users"
+                    ? ["users:read", "workspaces:read"]
+                    : toolName === "asana_list_project_tasks"
+                      ? ["tasks:read", "projects:read"]
+                      : toolName === "asana_delete_task"
+                        ? ["tasks:delete", "tasks:read"]
+                        : toolName === "asana_create_task"
+                          ? ["tasks:write"]
+                          : toolName === "asana_update_task"
+                            ? ["tasks:write", "tasks:read"]
+                            : ["tasks:read"],
           reconnectReason:
             toolName === "asana_create_task" ||
             toolName === "asana_update_task" ||
@@ -1024,6 +1003,14 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_list_my_tasks") {
+          if (input.projectGid && !looksLikeAsanaGid(input.projectGid)) {
+            return {
+              ok: false,
+              error: "ASANA_PROJECT_NOT_RESOLVED",
+              userMessage:
+                "I couldn't identify that Asana project. Use My Tasks for personal planning, or list projects first to pick a project."
+            };
+          }
           const workspaceGid = input.projectGid
             ? undefined
             : await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid);
@@ -1064,6 +1051,14 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_list_project_tasks") {
+          if (!looksLikeAsanaGid(input.projectGid)) {
+            return {
+              ok: false,
+              error: "ASANA_PROJECT_NOT_RESOLVED",
+              userMessage:
+                "I couldn't identify that Asana project. Use My Tasks for personal planning, or list projects first to pick a project."
+            };
+          }
           const data = await service.listProjectTasks(input);
           if (data.length) {
             const firstTask = data[0];
@@ -1112,7 +1107,7 @@ export class ToolExecutor {
 
         if (toolName === "asana_create_task") {
           const workspaceGid =
-            input.workspaceGid || !(input.projectGids?.length)
+            input.workspaceGid || !input.projectGids?.length
               ? await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid)
               : undefined;
           const data = await service.createTask({
@@ -1445,6 +1440,11 @@ export class ToolExecutor {
       };
     }
   }
+}
+
+function looksLikeAsanaGid(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return /^\d{3,}$/.test(value) || /^project_\d+$/.test(value);
 }
 
 function defaultToolFailureMessage(toolName: ToolName): string {

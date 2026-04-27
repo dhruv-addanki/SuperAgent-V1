@@ -9,6 +9,7 @@ import { env } from "../../config/env";
 import { logger } from "../../config/logger";
 import type { ResponseInputItem, ResponsesClient } from "../../lib/openaiClient";
 import { userMessageForError } from "../../lib/errors";
+import { normalizeAssistantMessageForUser } from "../../lib/messageText";
 import { AudioTranscriptionService } from "../audio/audioTranscriptionService";
 import { WhatsAppService } from "../whatsapp/whatsappService";
 import { WhatsAppMediaService } from "../whatsapp/whatsappMediaService";
@@ -16,7 +17,7 @@ import type { WhatsAppInboundMessagePayload } from "../whatsapp/whatsappTypes";
 import { AsanaTokenService } from "../asana/tokenService";
 import { GoogleTokenService } from "../google/tokenService";
 import { NotionTokenService } from "../notion/tokenService";
-import { LongTermMemory } from "../memory/longTermMemory";
+import { LongTermMemory, type AssistantResponsePreferences } from "../memory/longTermMemory";
 import { ShortTermMemory } from "../memory/shortTermMemory";
 import {
   buildPendingActionContext,
@@ -104,7 +105,10 @@ export class AgentOrchestrator {
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
   private readonly setupStatusService: SetupStatusService;
-  private readonly whatsappMediaService: Pick<WhatsAppMediaService, "downloadAudio" | "downloadImage">;
+  private readonly whatsappMediaService: Pick<
+    WhatsAppMediaService,
+    "downloadAudio" | "downloadImage"
+  >;
   private readonly audioTranscriptionService: Pick<AudioTranscriptionService, "transcribe">;
 
   constructor(
@@ -153,7 +157,10 @@ export class AgentOrchestrator {
     try {
       if (input.messageId) {
         this.whatsappService.sendTypingIndicator(input.messageId).catch((error) => {
-          logger.warn({ error, messageId: input.messageId }, "Failed to send WhatsApp typing indicator");
+          logger.warn(
+            { error, messageId: input.messageId },
+            "Failed to send WhatsApp typing indicator"
+          );
         });
       }
 
@@ -175,6 +182,19 @@ export class AgentOrchestrator {
         user = { ...user, timezone: memoryExtraction.timezone };
       }
       await this.maybeRememberImageContext(user.id, preparedInput);
+
+      const responsePreferences = memoryExtraction.responsePreferences;
+      if (
+        responsePreferences &&
+        isResponsePreferenceOnlyMessage(preparedInput.text, responsePreferences)
+      ) {
+        await this.reply(
+          conversation.id,
+          preparedInput.from,
+          formatResponsePreferenceAcknowledgement(responsePreferences)
+        );
+        return;
+      }
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
@@ -200,7 +220,9 @@ export class AgentOrchestrator {
         await this.reply(
           conversation.id,
           preparedInput.from,
-          allowSetupHint && appendSetupHint ? appendSetupHintToMessage(message, setupStatus) : message
+          allowSetupHint && appendSetupHint
+            ? appendSetupHintToMessage(message, setupStatus)
+            : message
         );
       };
 
@@ -254,9 +276,7 @@ export class AgentOrchestrator {
         const scopeLabel = ambiguousBulkComplete.projectName
           ? `${ambiguousBulkComplete.taskCount} listed tasks in ${ambiguousBulkComplete.projectName}`
           : `${ambiguousBulkComplete.taskCount} listed tasks`;
-        await replyToUser(
-          `Do you mean ${scopeLabel}, or every incomplete Asana task I can see?`
-        );
+        await replyToUser(`Do you mean ${scopeLabel}, or every incomplete Asana task I can see?`);
         return;
       }
 
@@ -285,8 +305,8 @@ export class AgentOrchestrator {
 
       const genericCalendarOverview =
         shouldUseTextShortcuts && !isCompoundIntent
-          ? matchGenericCalendarOverviewRequest(preparedInput.text) ??
-            matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history)
+          ? (matchGenericCalendarOverviewRequest(preparedInput.text) ??
+            matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history))
           : null;
       if (genericCalendarOverview) {
         const window = calendarOverviewWindow(genericCalendarOverview, user.timezone);
@@ -362,14 +382,16 @@ export class AgentOrchestrator {
 
         if (!todayResult.ok) {
           await replyToUser(
-            todayResult.userMessage ?? "I couldn't load your Asana tasks right now. Try again in a moment."
+            todayResult.userMessage ??
+              "I couldn't load your Asana tasks right now. Try again in a moment."
           );
           return;
         }
 
         if (!latestOpenResult.ok) {
           await replyToUser(
-            latestOpenResult.userMessage ?? "I couldn't load your latest Asana task right now. Try again in a moment."
+            latestOpenResult.userMessage ??
+              "I couldn't load your latest Asana task right now. Try again in a moment."
           );
           return;
         }
@@ -392,7 +414,9 @@ export class AgentOrchestrator {
       );
       if (shouldUseTextShortcuts && !isCompoundIntent && asanaLatestShortcut) {
         const toolName =
-          asanaLatestShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
+          asanaLatestShortcut.scope === "project"
+            ? "asana_list_project_tasks"
+            : "asana_list_my_tasks";
         const result = await this.toolExecutor.executeToolCall(
           toolName,
           {
@@ -413,7 +437,8 @@ export class AgentOrchestrator {
 
         if (!result.ok) {
           await replyToUser(
-            result.userMessage ?? "I couldn't load that Asana task right now. Try again in a moment."
+            result.userMessage ??
+              "I couldn't load that Asana task right now. Try again in a moment."
           );
           return;
         }
@@ -440,7 +465,9 @@ export class AgentOrchestrator {
       );
       if (shouldUseTextShortcuts && !isCompoundIntent && asanaListShortcut) {
         const toolName =
-          asanaListShortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
+          asanaListShortcut.scope === "project"
+            ? "asana_list_project_tasks"
+            : "asana_list_my_tasks";
         const result = await this.toolExecutor.executeToolCall(
           toolName,
           {
@@ -463,21 +490,19 @@ export class AgentOrchestrator {
 
         if (!result.ok) {
           await replyToUser(
-            result.userMessage ?? "I couldn't load those Asana tasks right now. Try again in a moment."
+            result.userMessage ??
+              "I couldn't load those Asana tasks right now. Try again in a moment."
           );
           return;
         }
 
         await replyToUser(
-          formatScopedAsanaTaskList(
-            (result.data as AsanaTaskSummary[] | undefined) ?? [],
-            {
-              label: asanaListShortcut.label,
-              emptyLabel: `I don't see open Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
-              scopeName: asanaListShortcut.project?.name,
-              emphasizeImportance: asanaListShortcut.emphasizeImportance
-            }
-          )
+          formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+            label: asanaListShortcut.label,
+            emptyLabel: `I don't see open Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
+            scopeName: asanaListShortcut.project?.name,
+            emphasizeImportance: asanaListShortcut.emphasizeImportance
+          })
         );
         return;
       }
@@ -500,7 +525,8 @@ export class AgentOrchestrator {
 
         if (!result.ok) {
           await replyToUser(
-            result.userMessage ?? "I couldn't load your Asana tasks right now. Try again in a moment."
+            result.userMessage ??
+              "I couldn't load your Asana tasks right now. Try again in a moment."
           );
           return;
         }
@@ -724,12 +750,13 @@ export class AgentOrchestrator {
   }
 
   private async reply(conversationId: string, to: string, message: string): Promise<void> {
+    const safeMessage = normalizeAssistantMessageForUser(message);
     await persistMessage(this.prisma, {
       conversationId,
       role: MessageRole.ASSISTANT,
-      content: message
+      content: safeMessage
     });
-    await this.whatsappService.sendTextMessage(to, message);
+    await this.whatsappService.sendTextMessage(to, safeMessage);
   }
 }
 
@@ -745,6 +772,45 @@ function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {
 function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): string {
   const hint = formatSetupHintForWhatsApp(setupStatus);
   return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
+
+function isResponsePreferenceOnlyMessage(
+  text: string,
+  preferences: AssistantResponsePreferences
+): boolean {
+  if (!Object.keys(preferences).length) return false;
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  const hasPreferenceRequest =
+    /\b(from now on|for future|always|use .* replies|set your|change your|style|tone|voice|vibe|personality|talk like|sound like|respond like|reply like|no\s+em\s*dashes?|no\s+emdashes?|avoid\s+em\s*dashes?|avoid\s+emdashes?|no\s+casual\s+dashes?|avoid\s+casual\s+dashes?|dont\s+use\s+-|don't\s+use\s+-|do\s+not\s+use\s+-)\b/.test(
+      normalized
+    ) ||
+    /\b(?:be|make|keep)\s+(?:more\s+)?(?:concise|brief|short|detailed|direct|friendly|formal|casual|warm|professional|calm|playful|human[-\s]?like)\b/.test(
+      normalized
+    );
+  if (!hasPreferenceRequest) return false;
+
+  return !/\b(calendar|email|gmail|asana|notion|drive|doc|docs|task|tasks|event|reminder|send|book|create|add|delete|trash|move|update|search|find|read|summarize|list|look up|why|what|when)\b/.test(
+    normalized
+  );
+}
+
+function formatResponsePreferenceAcknowledgement(
+  preferences: AssistantResponsePreferences
+): string {
+  const parts = [
+    typeof preferences.verbosity === "string" ? preferences.verbosity : undefined,
+    typeof preferences.tone === "string" ? preferences.tone : undefined,
+    typeof preferences.format === "string" ? preferences.format : undefined,
+    preferences.minimalFollowUps === true ? "minimal follow-ups" : undefined,
+    preferences.humanLike === true ? "more natural" : undefined,
+    preferences.avoidEmDashes === true ? "no em dashes" : undefined,
+    preferences.avoidHyphenSeparators === true ? "no casual dash separators" : undefined,
+    typeof preferences.style === "string" ? preferences.style : undefined,
+    typeof preferences.personality === "string" ? preferences.personality : undefined
+  ].filter((part): part is string => Boolean(part));
+
+  if (!parts.length) return "Got it. I'll adjust my replies.";
+  return `Got it. I'll keep replies ${parts.join(", ")}.`;
 }
 
 function buildImageInputItem(text: string, imageDataUrl: string): ResponseInputItem {
@@ -810,9 +876,8 @@ function matchRecentGoogleDocDeleteRequest(
   if (/\b(google doc|doc|docs|document)\b/.test(normalized)) return doc;
 
   const pronounTarget =
-    /\b(delete|trash|remove|get rid of)\s+(it|that|this|same one|current one)\b/.test(
-      normalized
-    ) || /\b(delete|trash|remove|get rid of)\s+(that|this|same|current)\b/.test(normalized);
+    /\b(delete|trash|remove|get rid of)\s+(it|that|this|same one|current one)\b/.test(normalized) ||
+    /\b(delete|trash|remove|get rid of)\s+(that|this|same|current)\b/.test(normalized);
   if (!pronounTarget) return null;
 
   return hasCompetingRecentActionTarget(memoryEntries) ? null : doc;

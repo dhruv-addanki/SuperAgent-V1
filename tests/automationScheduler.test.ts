@@ -112,9 +112,15 @@ describe("automation scheduler", () => {
 
     expect(count).toBe(1);
     expect(runResponseLoopMock).toHaveBeenCalledOnce();
-    expect(runResponseLoopMock.mock.calls[0][0].tools.some((tool: any) => tool.name === "automation_list")).toBe(
-      false
-    );
+    expect(
+      runResponseLoopMock.mock.calls[0][0].tools.some(
+        (tool: any) => tool.name === "automation_list"
+      )
+    ).toBe(false);
+    expect(runResponseLoopMock.mock.calls[0][0]).toMatchObject({
+      continueAfterToolMessages: true
+    });
+    expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain("use asana_list_my_tasks");
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "Morning brief\n\nHere is your morning brief."

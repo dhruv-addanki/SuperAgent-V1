@@ -10,13 +10,9 @@ describe("calendar read shortcut", () => {
   it("matches generic all-calendar overview requests", () => {
     expect(matchGenericCalendarOverviewRequest("What's on my calendar today?")).toBe("today");
     expect(matchGenericCalendarOverviewRequest("What's on my cal today")).toBe("today");
-    expect(matchGenericCalendarOverviewRequest("Check all my calendars tomorrow")).toBe(
-      "tomorrow"
-    );
+    expect(matchGenericCalendarOverviewRequest("Check all my calendars tomorrow")).toBe("tomorrow");
     expect(matchGenericCalendarOverviewRequest("Check my calendar")).toBe("today");
-    expect(matchGenericCalendarOverviewRequest("What's on my meetings calendar today?")).toBe(
-      null
-    );
+    expect(matchGenericCalendarOverviewRequest("What's on my meetings calendar today?")).toBe(null);
   });
 
   it("does not steal calendar write requests", () => {
@@ -60,7 +56,7 @@ describe("calendar read shortcut", () => {
 
     expect(message).toContain("Across all calendars today:");
     expect(message).toContain("Breakfast (General)");
-    expect(message).toContain("All day — All day note (Personal)");
+    expect(message).toContain("All day: All day note (Personal)");
   });
 
   it("matches positive follow-ups to an all-calendar check", () => {
@@ -68,7 +64,8 @@ describe("calendar read shortcut", () => {
       matchCalendarAllCalendarsFollowUpRequest("Check them all yes", [
         {
           role: "assistant",
-          content: "Nothing matched on that calendar today.\n\nWant me to check all calendars for today instead?"
+          content:
+            "Nothing matched on that calendar today.\n\nWant me to check all calendars for today instead?"
         }
       ])
     ).toBe("today");

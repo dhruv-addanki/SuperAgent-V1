@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { env } from "../../config/env";
 import { WHATSAPP_TEXT_LIMIT } from "../../config/constants";
 import { ExternalApiError } from "../../lib/errors";
+import { normalizeAssistantMessageForUser } from "../../lib/messageText";
 import type {
   SendTemplateResult,
   SendTextResult,
@@ -145,7 +146,7 @@ export class WhatsAppService {
   }
 
   formatText(body: string): string {
-    const compact = body.trim().replace(/\n{3,}/g, "\n\n");
+    const compact = normalizeAssistantMessageForUser(body);
     if (compact.length <= WHATSAPP_TEXT_LIMIT) return compact;
     return `${compact.slice(0, WHATSAPP_TEXT_LIMIT - 20).trimEnd()}\n\n[truncated]`;
   }

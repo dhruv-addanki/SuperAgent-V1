@@ -166,6 +166,33 @@ describe("tool executor Asana flows", () => {
     ]);
   });
 
+  it("rejects unresolved project names before listing project tasks", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: { upsert: vi.fn(async () => undefined) }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn(async () => ({})) } as any,
+      { getAccessTokenForUser: vi.fn(async () => "asana-token") } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "asana_list_project_tasks",
+      { projectGid: "My Tasks", dueOn: "2026-04-22" },
+      {
+        user: { id: "user_1", timezone: "America/New_York", whatsappPhone: "+15555550100" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "make an Asana plan"
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.userMessage).toContain("Use My Tasks for personal planning");
+    expect(listProjectTasksMock).not.toHaveBeenCalled();
+  });
+
   it("stores recent Asana task context when creating a task", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },

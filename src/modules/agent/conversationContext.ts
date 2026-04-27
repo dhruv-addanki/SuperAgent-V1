@@ -35,7 +35,8 @@ export function buildConversationContext(input: {
         inferActiveAppFromMemory(input.memoryEntries) ??
         "general");
   const contextApps = activeApp === "multi" ? messageApps : undefined;
-  const includeImageContext = activeApp === "image" || referencesImageContext(input.latestUserMessage);
+  const includeImageContext =
+    activeApp === "image" || referencesImageContext(input.latestUserMessage);
 
   const activeEntities: string[] = [];
   const recentResults: string[] = [];
@@ -127,12 +128,18 @@ export function buildConversationContext(input: {
 export function formatConversationContextForPrompt(context: ConversationContext): string {
   return [
     "User profile:",
-    context.userProfile.length ? context.userProfile.map((line) => `- ${line}`).join("\n") : "- None",
+    context.userProfile.length
+      ? context.userProfile.map((line) => `- ${line}`).join("\n")
+      : "- None",
     `Active app/workflow: ${context.activeApp}`,
     "Active entities:",
-    context.activeEntities.length ? context.activeEntities.map((line) => `- ${line}`).join("\n") : "- None",
+    context.activeEntities.length
+      ? context.activeEntities.map((line) => `- ${line}`).join("\n")
+      : "- None",
     "Recent resolved context:",
-    context.recentResults.length ? context.recentResults.map((line) => `- ${line}`).join("\n") : "- None",
+    context.recentResults.length
+      ? context.recentResults.map((line) => `- ${line}`).join("\n")
+      : "- None",
     "Pending action summary:",
     context.pendingActionSummary,
     "Communication hints:",
@@ -153,12 +160,24 @@ function assistantPreferenceSummary(value: unknown): string | null {
     tone?: unknown;
     format?: unknown;
     minimalFollowUps?: unknown;
+    humanLike?: unknown;
+    avoidEmDashes?: unknown;
+    avoidHyphenSeparators?: unknown;
+    style?: unknown;
+    personality?: unknown;
   };
   const parts = [
     typeof preferences.verbosity === "string" ? preferences.verbosity : undefined,
     typeof preferences.tone === "string" ? preferences.tone : undefined,
     typeof preferences.format === "string" ? preferences.format : undefined,
-    preferences.minimalFollowUps === true ? "minimal follow-ups" : undefined
+    preferences.minimalFollowUps === true ? "minimal follow-ups" : undefined,
+    preferences.humanLike === true ? "human-like" : undefined,
+    preferences.avoidEmDashes === true ? "no em dashes" : undefined,
+    preferences.avoidHyphenSeparators === true ? "no casual dash separators" : undefined,
+    typeof preferences.style === "string" ? `style: ${preferences.style}` : undefined,
+    typeof preferences.personality === "string"
+      ? `personality: ${preferences.personality}`
+      : undefined
   ].filter((part): part is string => Boolean(part));
   return parts.length ? parts.join(", ") : null;
 }
@@ -234,9 +253,7 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     };
     if (!value?.summary) return { entities: [], hints: [] };
     return {
-      entities: [
-        `Recent image${value.caption ? ` with caption: ${value.caption}` : ""}`
-      ],
+      entities: [`Recent image${value.caption ? ` with caption: ${value.caption}` : ""}`],
       resultSummary: `Recent image context: ${value.summary}`,
       hints: [
         "If the user says that image, that screenshot, this photo, or the image I sent, use the stored image context above. Do not identify people from images."
@@ -252,9 +269,7 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     };
     if (!value?.documentId) return { entities: [], hints: [] };
     return {
-      entities: [
-        `Google Doc: ${value.title ?? "Untitled"} (documentId: ${value.documentId})`
-      ],
+      entities: [`Google Doc: ${value.title ?? "Untitled"} (documentId: ${value.documentId})`],
       resultSummary: `Current Google Doc: ${value.title ?? "Untitled"}.`,
       hints: [
         "If the user says same doc, current doc, that doc, read it, summarize it, append to it, or delete it, use the stored Google Doc above. Use docs tools for read/append and drive_delete_file with documentId as fileId for deletion."
@@ -267,7 +282,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = threads
       .slice(0, 5)
       .map((thread) =>
-        typeof thread === "object" && thread && typeof (thread as { threadId?: unknown }).threadId === "string"
+        typeof thread === "object" &&
+        thread &&
+        typeof (thread as { threadId?: unknown }).threadId === "string"
           ? `Gmail thread: ${(thread as { subject?: string }).subject ?? "No subject"} (threadId: ${
               (thread as { threadId: string }).threadId
             })`
@@ -276,7 +293,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent Gmail threads: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent Gmail threads: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user refers to those emails, that email, or the first listed thread, use the stored Gmail thread IDs."
@@ -290,7 +309,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = events
       .slice(0, 5)
       .map((event) =>
-        typeof event === "object" && event && typeof (event as { eventId?: unknown }).eventId === "string"
+        typeof event === "object" &&
+        event &&
+        typeof (event as { eventId?: unknown }).eventId === "string"
           ? `Calendar event: ${(event as { title?: string }).title ?? "Untitled"} (eventId: ${
               (event as { eventId: string }).eventId
             }${typeof (event as { calendarId?: unknown }).calendarId === "string" ? `, calendarId: ${(event as { calendarId: string }).calendarId}` : ""})`
@@ -299,7 +320,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent calendar events: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent calendar events: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user says move it, cancel it, reschedule it, or the first event, use the stored calendar event IDs."
@@ -313,7 +336,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = calendars
       .slice(0, 5)
       .map((calendar) =>
-        typeof calendar === "object" && calendar && typeof (calendar as { calendarId?: unknown }).calendarId === "string"
+        typeof calendar === "object" &&
+        calendar &&
+        typeof (calendar as { calendarId?: unknown }).calendarId === "string"
           ? `Calendar: ${(calendar as { summary?: string }).summary ?? "Untitled"} (calendarId: ${
               (calendar as { calendarId: string }).calendarId
             })`
@@ -322,7 +347,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent calendars: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent calendars: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user refers to the same calendar or one of the listed calendars, use the stored calendar IDs."
@@ -336,7 +363,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = files
       .slice(0, 5)
       .map((file) =>
-        typeof file === "object" && file && typeof (file as { fileId?: unknown }).fileId === "string"
+        typeof file === "object" &&
+        file &&
+        typeof (file as { fileId?: unknown }).fileId === "string"
           ? `Drive file: ${(file as { name?: string }).name ?? "Untitled"} (fileId: ${
               (file as { fileId: string }).fileId
             }${
@@ -349,7 +378,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent Drive files: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent Drive files: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user says same file, that file, read it, summarize it, or delete the first one, use the stored Drive file IDs. For Google Docs, read with docs_read_document and delete with drive_delete_file."
@@ -366,9 +397,7 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     };
     if (!value?.pageId) return { entities: [], hints: [] };
     return {
-      entities: [
-        `Notion page: ${value.title ?? "Untitled"} (pageId: ${value.pageId})`
-      ],
+      entities: [`Notion page: ${value.title ?? "Untitled"} (pageId: ${value.pageId})`],
       resultSummary: `Current Notion page: ${value.title ?? "Untitled"}.`,
       hints: [
         "If the user says same Notion page, that page, append to it, or add this there, use the stored Notion page ID."
@@ -381,7 +410,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = pages
       .slice(0, 5)
       .map((page) =>
-        typeof page === "object" && page && typeof (page as { pageId?: unknown }).pageId === "string"
+        typeof page === "object" &&
+        page &&
+        typeof (page as { pageId?: unknown }).pageId === "string"
           ? `Notion page: ${(page as { title?: string }).title ?? "Untitled"} (pageId: ${
               (page as { pageId: string }).pageId
             })`
@@ -390,7 +421,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent Notion pages: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent Notion pages: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user refers to the first Notion page, that page, or one of the listed pages, use the stored Notion page IDs."
@@ -407,7 +440,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
         `Asana workspace: ${value.name ?? "Unnamed"} (workspaceGid: ${value.workspaceGid})`
       ],
       resultSummary: `Active Asana workspace: ${value.name ?? "Unnamed"}.`,
-      hints: ["Use the stored Asana workspace for follow-up task requests unless the user picks another one."]
+      hints: [
+        "Use the stored Asana workspace for follow-up task requests unless the user picks another one."
+      ]
     };
   }
 
@@ -416,7 +451,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = projects
       .slice(0, 5)
       .map((project) =>
-        typeof project === "object" && project && typeof (project as { projectGid?: unknown }).projectGid === "string"
+        typeof project === "object" &&
+        project &&
+        typeof (project as { projectGid?: unknown }).projectGid === "string"
           ? `Asana project: ${(project as { name?: string }).name ?? "Untitled"} (projectGid: ${
               (project as { projectGid: string }).projectGid
             })`
@@ -425,7 +462,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent Asana projects: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent Asana projects: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user refers to that project, the same project, or one of the listed projects, use the stored Asana project IDs."
@@ -439,7 +478,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = teams
       .slice(0, 5)
       .map((team) =>
-        typeof team === "object" && team && typeof (team as { teamGid?: unknown }).teamGid === "string"
+        typeof team === "object" &&
+        team &&
+        typeof (team as { teamGid?: unknown }).teamGid === "string"
           ? `Asana team: ${(team as { name?: string }).name ?? "Untitled"} (teamGid: ${
               (team as { teamGid: string }).teamGid
             })`
@@ -448,7 +489,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent Asana teams: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent Asana teams: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user refers to that team or one of the listed teams, use the stored Asana team IDs."
@@ -462,7 +505,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
     const entities = tasks
       .slice(0, 5)
       .map((task) =>
-        typeof task === "object" && task && typeof (task as { taskGid?: unknown }).taskGid === "string"
+        typeof task === "object" &&
+        task &&
+        typeof (task as { taskGid?: unknown }).taskGid === "string"
           ? `Asana task: ${(task as { name?: string }).name ?? "Untitled"} (taskGid: ${
               (task as { taskGid: string }).taskGid
             })`
@@ -471,7 +516,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent Asana tasks: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent Asana tasks: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user says that task, the first one, complete it, rename it, or reassign it, use the stored Asana task IDs."
@@ -496,7 +543,9 @@ function summarizeEntry(entry: PromptMemoryEntry): {
       .filter((value): value is string => Boolean(value));
     return {
       entities,
-      resultSummary: entities.length ? `Recent automations: ${entities.length} available.` : undefined,
+      resultSummary: entities.length
+        ? `Recent automations: ${entities.length} available.`
+        : undefined,
       hints: entities.length
         ? [
             "If the user says pause it, resume it, delete it, or the first automation, use the stored automation IDs."

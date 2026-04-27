@@ -359,6 +359,68 @@ describe("response loop", () => {
     expect((client.createResponse as any).mock.calls).toHaveLength(1);
   });
 
+  it("can continue after partial tool failures so scheduled digests stay human-readable", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi
+        .fn()
+        .mockResolvedValueOnce({
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_gmail",
+              name: "gmail_search_threads",
+              arguments: JSON.stringify({
+                query: "important newer_than:1d"
+              })
+            },
+            {
+              type: "function_call",
+              call_id: "call_calendar",
+              name: "calendar_list_events",
+              arguments: JSON.stringify({
+                timeMin: "2026-04-24T04:00:00.000Z",
+                timeMax: "2026-04-25T04:00:00.000Z"
+              })
+            }
+          ]
+        })
+        .mockResolvedValueOnce({
+          output_text:
+            "I found 1 important email. Calendar was unavailable, so I could not include your schedule."
+        })
+    };
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "scheduled digest",
+      tools: [],
+      input: [{ role: "user", content: "run morning digest" }],
+      executeTool: vi.fn(async (toolName: string) =>
+        toolName === "gmail_search_threads"
+          ? {
+              ok: true,
+              data: [{ threadId: "thread_1", subject: "Launch update" }]
+            }
+          : {
+              ok: false,
+              error: "GOOGLE_API_ERROR",
+              userMessage: "I couldn't reach Google Calendar right now."
+            }
+      ),
+      maxToolRounds: 3,
+      continueAfterToolMessages: true
+    });
+
+    expect(result.assistantMessage).toContain("I found 1 important email.");
+    expect((client.createResponse as any).mock.calls).toHaveLength(2);
+    const secondCall = (client.createResponse as any).mock.calls[1][0];
+    const functionOutputs = secondCall.input.filter(
+      (item: any) => item.type === "function_call_output"
+    );
+    expect(functionOutputs).toHaveLength(2);
+  });
+
   it("does not let a Gmail draft stop other clear tasks in the same batch", async () => {
     const client: ResponsesClient = {
       createResponse: vi.fn(async () => ({

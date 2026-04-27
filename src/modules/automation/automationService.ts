@@ -86,20 +86,13 @@ export class AutomationService {
         userId,
         status: { not: AutomationStatus.DELETED }
       },
-      orderBy: [
-        { status: "asc" },
-        { nextRunAt: "asc" },
-        { createdAt: "asc" }
-      ]
+      orderBy: [{ status: "asc" }, { nextRunAt: "asc" }, { createdAt: "asc" }]
     });
 
     return automations.map(summarizeAutomation);
   }
 
-  async rememberRecentAutomations(
-    userId: string,
-    automations: AutomationSummary[]
-  ): Promise<void> {
+  async rememberRecentAutomations(userId: string, automations: AutomationSummary[]): Promise<void> {
     await this.prisma.memoryEntry.upsert({
       where: { userId_key: { userId, key: "recent_automations" } },
       update: {
@@ -129,7 +122,11 @@ export class AutomationService {
     });
   }
 
-  async resumeAutomation(userId: string, target: AutomationTargetInput, now = new Date()): Promise<Automation> {
+  async resumeAutomation(
+    userId: string,
+    target: AutomationTargetInput,
+    now = new Date()
+  ): Promise<Automation> {
     const automation = await this.resolveAutomationTarget(userId, target);
     const schedule = normalizeAutomationSchedule(automation.schedule);
     return this.prisma.automation.update({
@@ -338,13 +335,13 @@ export function formatAutomationList(
         automation.nextRunAt.getTime() <= now.getTime();
       const overdueLabel = overdue
         ? options.runnerEnabled === false
-          ? " - overdue; automation runner is disabled"
-          : " - overdue; waiting for runner"
+          ? " Overdue: automation runner is disabled."
+          : " Overdue: waiting for runner."
         : "";
-      return `${index + 1}. ${automation.name} - ${status} - ${automation.scheduleLabel} - next ${formatForUser(
+      return `${index + 1}. ${automation.name}: ${status}. Runs: ${automation.scheduleLabel}. Next: ${formatForUser(
         automation.nextRunAt,
         timezone
-      )}${overdueLabel}`;
+      )}.${overdueLabel}`;
     })
   ].join("\n");
 }
