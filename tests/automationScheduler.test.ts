@@ -8,6 +8,7 @@ vi.mock("../src/modules/agent/responseLoop", () => ({
 }));
 
 import { AutomationScheduler } from "../src/modules/automation/automationScheduler";
+import { ToolExecutor } from "../src/modules/agent/toolExecutor";
 
 describe("automation scheduler", () => {
   afterEach(() => {
@@ -20,7 +21,7 @@ describe("automation scheduler", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-24T12:00:00.000Z"));
     runResponseLoopMock.mockResolvedValue({
-      assistantMessage: "Here is your morning brief.",
+      assistantMessage: "Morning digest:\n\nHere is your morning brief.",
       toolRounds: 1
     });
 
@@ -121,6 +122,26 @@ describe("automation scheduler", () => {
       continueAfterToolMessages: true
     });
     expect(runResponseLoopMock.mock.calls[0][0].instructions).toContain("use asana_list_my_tasks");
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({ ok: true, data: [] });
+    await runResponseLoopMock.mock.calls[0][0].executeTool("asana_list_project_tasks", {
+      projectGid: "My Tasks",
+      limit: 10
+    });
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.objectContaining({
+        completed: false,
+        limit: 10,
+        sortBy: "due",
+        sortDirection: "asc"
+      }),
+      expect.objectContaining({
+        latestUserMessage: "Summarize important emails and list calendar events."
+      }),
+      { force: true }
+    );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       "Morning brief\n\nHere is your morning brief."

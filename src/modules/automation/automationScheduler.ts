@@ -209,9 +209,10 @@ export class AutomationScheduler {
             userMessage: "Scheduled automations can only use read-only tools."
           });
         }
+        const routedCall = routeAutomationToolCall(toolName, toolInput);
         return this.toolExecutor.executeToolCall(
-          toolName,
-          toolInput,
+          routedCall.toolName,
+          routedCall.input,
           {
             user,
             conversation,
@@ -293,6 +294,41 @@ export class AutomationScheduler {
 }
 
 function formatAutomationDigest(name: string, body: string): string {
-  const compactBody = body.trim() || "No summary was produced.";
+  const compactBody = stripRedundantDigestHeading(body.trim()) || "No summary was produced.";
   return `${name}\n\n${compactBody}`;
+}
+
+function routeAutomationToolCall(
+  toolName: string,
+  input: unknown
+): { toolName: string; input: unknown } {
+  if (toolName !== "asana_list_project_tasks") {
+    return { toolName, input };
+  }
+
+  const inputObject = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  if (looksLikeAsanaGid(inputObject.projectGid)) {
+    return { toolName, input };
+  }
+
+  return {
+    toolName: "asana_list_my_tasks",
+    input: {
+      completed: typeof inputObject.completed === "boolean" ? inputObject.completed : false,
+      dueOn: inputObject.dueOn,
+      dueBefore: inputObject.dueBefore,
+      limit: typeof inputObject.limit === "number" ? inputObject.limit : 20,
+      sortBy: inputObject.sortBy ?? "due",
+      sortDirection: inputObject.sortDirection ?? "asc"
+    }
+  };
+}
+
+function looksLikeAsanaGid(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return /^\d{3,}$/.test(value) || /^project_\d+$/.test(value);
+}
+
+function stripRedundantDigestHeading(body: string): string {
+  return body.replace(/^\s*(?:[-*•]\s*)?(?:morning\s+)?digest\s*:?\s*/i, "").trim();
 }
