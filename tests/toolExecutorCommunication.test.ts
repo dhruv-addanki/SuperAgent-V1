@@ -199,6 +199,60 @@ describe("tool executor communication context", () => {
     );
   });
 
+  it("clears recent calendar event memory when all events are excluded", async () => {
+    listEventsMock.mockResolvedValue([
+      {
+        id: "event_kri",
+        title: "PHYS 2720",
+        calendarId: "kri_school",
+        calendarSummary: "Kri School",
+        start: "2026-04-23T20:00:00.000Z"
+      }
+    ]);
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: {
+        findUnique: vi.fn(async ({ where }: any) =>
+          where.userId_key.key === "calendar_exclusion_preferences"
+            ? { value: { excludedCalendarNames: ["Kri School"] } }
+            : null
+        ),
+        upsert: vi.fn(async () => undefined)
+      }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn(async () => ({})) } as any,
+      { getAccessTokenForUser: vi.fn(async () => "asana-token") } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "calendar_list_events",
+      {
+        timeMin: "2026-04-23T00:00:00.000Z",
+        timeMax: "2026-04-24T00:00:00.000Z"
+      },
+      {
+        user: { id: "user_1", timezone: "America/New_York" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "what is on my calendar today"
+      }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toEqual([]);
+    expect(prisma.memoryEntry.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "recent_calendar_events" } },
+        update: {
+          value: [],
+          confidence: 1
+        }
+      })
+    );
+  });
+
   it("stores recent Drive file context from search and metadata reads", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },

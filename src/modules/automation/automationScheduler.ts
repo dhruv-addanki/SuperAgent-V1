@@ -164,9 +164,11 @@ export class AutomationScheduler {
     user: User,
     conversation: Conversation
   ) {
-    const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
     const setupStatus = await this.setupStatusService.getStatus(user);
     const preloadedData = await this.buildAutomationDataSnapshot(automation, user, conversation);
+    const memoryEntries = filterAutomationContextMemoryEntries(
+      await this.longTermMemory.getRecentEntriesForContext(user.id)
+    );
     const automationInput = [
       "Run this scheduled automation now.",
       `Automation name: ${automation.name}`,
@@ -424,6 +426,7 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- Only use read-only information tools.",
     "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
     "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
+    "- If structured conversation context conflicts with preloaded read-only data, trust the preloaded data for this run.",
     "- Write the digest as a compact command center for starting the day.",
     "- Target 10 to 14 WhatsApp-friendly lines. You may go slightly longer for real conflicts or source failures.",
     "- Use these section labels when relevant: At a glance, Schedule, Focus plan, Watchouts, You can ask me to.",
@@ -440,6 +443,10 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- If a requested source is unavailable, include that briefly in Watchouts without drowning out successful sections.",
     "- For Asana planning based on the user's own work, use asana_list_my_tasks. Do not call asana_list_project_tasks unless you have a real projectGid from recent context or asana_list_projects."
   ].join("\n");
+}
+
+export function filterAutomationContextMemoryEntries<T extends { key: string }>(entries: T[]): T[] {
+  return entries.filter((entry) => !entry.key.startsWith("recent_"));
 }
 
 function formatPreloadedAutomationResult(

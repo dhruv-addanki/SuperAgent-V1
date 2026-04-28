@@ -6,6 +6,7 @@ import {
 } from "../src/modules/automation/automationService";
 import {
   buildScheduledAutomationInstructions,
+  filterAutomationContextMemoryEntries,
   formatAutomationDigest
 } from "../src/modules/automation/automationScheduler";
 
@@ -151,7 +152,36 @@ describe("automation formatting", () => {
     expect(instructions).toContain("Never output an empty section label");
     expect(instructions).toContain("1 to 3 exact reply commands");
     expect(instructions).toContain("at least one quoted command");
+    expect(instructions).toContain("trust the preloaded data");
     expect(instructions).toContain("Scheduled runs stay read-only");
     expect(instructions).toContain("Good candidates");
+  });
+
+  it("removes stale recent-result memory from automation prompt context", () => {
+    const entries = filterAutomationContextMemoryEntries([
+      {
+        key: "recent_calendar_events",
+        value: [{ title: "PHYS 2720", calendarSummary: "Kri School" }]
+      },
+      {
+        key: "calendar_exclusion_preferences",
+        value: { excludedCalendarNames: ["Kri School"] }
+      },
+      {
+        key: "assistant_response_preferences",
+        value: { verbosity: "concise" }
+      }
+    ]);
+
+    expect(entries).toEqual([
+      {
+        key: "calendar_exclusion_preferences",
+        value: { excludedCalendarNames: ["Kri School"] }
+      },
+      {
+        key: "assistant_response_preferences",
+        value: { verbosity: "concise" }
+      }
+    ]);
   });
 });

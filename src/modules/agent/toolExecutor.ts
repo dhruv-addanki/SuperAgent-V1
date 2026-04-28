@@ -275,8 +275,6 @@ export class ToolExecutor {
         htmlLink: event.htmlLink
       }));
 
-    if (!normalizedEvents.length) return;
-
     await this.prisma.memoryEntry.upsert({
       where: { userId_key: { userId, key: "recent_calendar_events" } },
       update: {
