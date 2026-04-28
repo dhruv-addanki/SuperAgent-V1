@@ -118,13 +118,39 @@ describe("automation formatting", () => {
     expect(message).toContain("\"Run the calendar check again\"");
   });
 
+  it("removes empty command-center section labels", () => {
+    const message = formatAutomationDigest(
+      "Morning email, calendar, and Asana digest",
+      [
+        "*At a glance:* Light class schedule today, with one admin priority.",
+        "",
+        "*Schedule:*",
+        "• 8:00 AM to 9:15 AM: CS 3744",
+        "",
+        "*Focus plan:*",
+        "• First block: handle the Treasury onboarding email.",
+        "",
+        "*Watchouts:*",
+        "*You can ask me to:*"
+      ].join("\n")
+    );
+
+    expect(message).toContain("*At a glance:*");
+    expect(message).toContain("*Schedule:*");
+    expect(message).toContain("*Focus plan:*");
+    expect(message).not.toContain("*Watchouts:*");
+    expect(message).not.toContain("*You can ask me to:*");
+  });
+
   it("documents the command-center scheduled automation prompt rules", () => {
     const instructions = buildScheduledAutomationInstructions("Base prompt");
 
     expect(instructions).toContain("compact command center");
     expect(instructions).toContain("Target 10 to 14 WhatsApp-friendly lines");
     expect(instructions).toContain("At a glance, Schedule, Focus plan, Watchouts, You can ask me to");
+    expect(instructions).toContain("Never output an empty section label");
     expect(instructions).toContain("1 to 3 exact reply commands");
+    expect(instructions).toContain("at least one quoted command");
     expect(instructions).toContain("Scheduled runs stay read-only");
     expect(instructions).toContain("Good candidates");
   });

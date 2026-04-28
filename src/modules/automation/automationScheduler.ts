@@ -410,7 +410,9 @@ export class AutomationScheduler {
 
 export function formatAutomationDigest(name: string, body: string): string {
   const compactBody =
-    capAutomationDigestLines(stripWeakDigestTail(stripRedundantDigestHeading(body.trim()))) ||
+    capAutomationDigestLines(
+      stripEmptyDigestSections(stripWeakDigestTail(stripRedundantDigestHeading(body.trim())))
+    ) ||
     "No summary was produced.";
   return normalizeAssistantMessageForUser(`${name}\n\n${compactBody}`);
 }
@@ -425,11 +427,13 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- Write the digest as a compact command center for starting the day.",
     "- Target 10 to 14 WhatsApp-friendly lines. You may go slightly longer for real conflicts or source failures.",
     "- Use these section labels when relevant: At a glance, Schedule, Focus plan, Watchouts, You can ask me to.",
+    "- Never output an empty section label. If there are no watchouts, omit Watchouts. If there are no exact suggested commands, omit You can ask me to.",
     "- Start with At a glance: one line summarizing the day, urgency, conflicts, and top focus.",
     "- Keep Schedule short. Include key events and conflicts, not every detail when the day is busy.",
     "- Keep Focus plan realistic. Prefer 2 or 3 time blocks or priorities.",
     "- Use Watchouts for calendar overlaps, time-sensitive email, missing source data, or risky assumptions.",
     "- End with You can ask me to only when useful, with 1 to 3 exact reply commands in quotes.",
+    "- If you include You can ask me to, it must contain at least one quoted command on the following lines.",
     "- Suggested commands must be actions the user can send after the digest, such as \"Move office hours to another slot\", \"Draft a reply to the Okta email\", or \"Create a calendar block for the Chase call\".",
     "- Scheduled runs stay read-only. Never claim you already performed a suggested follow-up action.",
     "- Avoid overconfident priority claims. Prefer wording like \"I'd prioritize\" or \"Good candidates\".",
@@ -540,6 +544,49 @@ function stripWeakDigestTail(body: string): string {
       ""
     )
     .trim();
+}
+
+function stripEmptyDigestSections(body: string): string {
+  const lines = body.split("\n");
+  const kept: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (isDigestSectionHeading(line) && !hasSectionContent(lines, index)) {
+      continue;
+    }
+    kept.push(line);
+  }
+
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function isDigestSectionHeading(line: string): boolean {
+  return digestSectionName(line) !== null;
+}
+
+function hasSectionContent(lines: string[], headingIndex: number): boolean {
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    const candidate = lines[index] ?? "";
+    if (isDigestSectionHeading(candidate)) return false;
+    if (candidate.trim()) return true;
+  }
+
+  return false;
+}
+
+function digestSectionName(line: string): string | null {
+  const normalized = line
+    .trim()
+    .replace(/^\*\s*/, "")
+    .replace(/\s*\*:?$/, "")
+    .replace(/:$/, "")
+    .trim()
+    .toLowerCase();
+
+  return /^(at a glance|schedule|focus plan|watchouts|you can ask me to)$/.test(normalized)
+    ? normalized
+    : null;
 }
 
 function capAutomationDigestLines(body: string): string {
