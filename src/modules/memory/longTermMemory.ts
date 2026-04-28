@@ -87,6 +87,11 @@ export class LongTermMemory {
       result.responsePreferences = responsePreferences;
     }
 
+    const excludedCalendarNames = extractExcludedCalendarNames(text);
+    if (excludedCalendarNames.length) {
+      await this.rememberExcludedCalendarNames(user.id, excludedCalendarNames);
+    }
+
     const toneMatch = text.match(
       /\b(prefer|use) (a )?(concise|friendly|formal|direct) email tone\b/i
     );
@@ -189,6 +194,41 @@ export class LongTermMemory {
         key: "assistant_response_preferences",
         value: merged,
         confidence: 0.8
+      }
+    });
+  }
+
+  private async rememberExcludedCalendarNames(userId: string, calendarNames: string[]): Promise<void> {
+    const existing = await this.prisma.memoryEntry.findUnique({
+      where: { userId_key: { userId, key: "calendar_exclusion_preferences" } }
+    });
+    const existingNames =
+      existing?.value &&
+      typeof existing.value === "object" &&
+      Array.isArray((existing.value as { excludedCalendarNames?: unknown }).excludedCalendarNames)
+        ? (existing.value as { excludedCalendarNames: unknown[] }).excludedCalendarNames
+            .filter((value): value is string => typeof value === "string")
+            .map(normalizeCalendarNameForStorage)
+            .filter(Boolean)
+        : [];
+    const merged = Array.from(
+      new Map(
+        [...existingNames, ...calendarNames.map(normalizeCalendarNameForStorage).filter(Boolean)]
+          .map((name) => [name.toLowerCase(), name])
+      ).values()
+    );
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "calendar_exclusion_preferences" } },
+      update: {
+        value: { excludedCalendarNames: merged },
+        confidence: 0.9
+      },
+      create: {
+        userId,
+        key: "calendar_exclusion_preferences",
+        value: { excludedCalendarNames: merged },
+        confidence: 0.9
       }
     });
   }
@@ -297,6 +337,55 @@ function extractAssistantResponsePreferences(text: string): AssistantResponsePre
   if (personality) preferences.personality = personality;
 
   return preferences;
+}
+
+function extractExcludedCalendarNames(text: string): string[] {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  const hasCalendarSignal = /\b(cal|calendar|calendars)\b/.test(normalized);
+  const hasExclusionSignal =
+    /\b(don't|dont|do not|never|exclude|ignore|skip|leave out|disinclude)\b/.test(normalized) &&
+    /\b(use|include|show|pull|read|count|calendar|calendars)\b/.test(normalized);
+  if (!hasCalendarSignal || !hasExclusionSignal) return [];
+
+  const names = new Set<string>();
+  const quotedPatterns = [
+    /\bcalendar\s+(?:called|named)\s+['"]([^'"]{2,80})['"]/gi,
+    /\b(?:called|named)\s+['"]([^'"]{2,80})['"]\s+calendar\b/gi,
+    /['"]([^'"]{2,80})['"]\s+calendar\b/gi,
+    /\bcalendar\s+['"]([^'"]{2,80})['"]/gi
+  ];
+
+  for (const pattern of quotedPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      const name = normalizeCalendarNameForStorage(match[1] ?? "");
+      if (name) names.add(name);
+    }
+  }
+
+  if (!names.size) {
+    const unquotedPatterns = [
+      /\b(?:exclude|ignore|skip|leave out|disinclude)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+calendar\b/gi,
+      /\b(?:don't|dont|do not|never)\s+(?:use|include|show|pull|read|count)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+calendar\b/gi
+    ];
+
+    for (const pattern of unquotedPatterns) {
+      for (const match of text.matchAll(pattern)) {
+        const name = normalizeCalendarNameForStorage(match[1] ?? "");
+        if (name) names.add(name);
+      }
+    }
+  }
+
+  return Array.from(names);
+}
+
+function normalizeCalendarNameForStorage(value: string): string {
+  return value
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .replace(/[.,!?;:]+$/g, "")
+    .trim();
 }
 
 function extractStylePreference(text: string): string | null {

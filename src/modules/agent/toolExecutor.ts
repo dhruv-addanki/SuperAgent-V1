@@ -292,6 +292,29 @@ export class ToolExecutor {
     });
   }
 
+  private async getExcludedCalendarNames(userId: string): Promise<string[]> {
+    const memoryEntry = await (this.prisma as any).memoryEntry?.findUnique?.({
+      where: { userId_key: { userId, key: "calendar_exclusion_preferences" } }
+    });
+    const excluded = memoryEntry?.value?.excludedCalendarNames;
+    if (!Array.isArray(excluded)) return [];
+    return excluded
+      .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+      .map((value) => value.trim().toLowerCase());
+  }
+
+  private async applyCalendarExclusions(
+    userId: string,
+    events: CalendarEventSummary[]
+  ): Promise<CalendarEventSummary[]> {
+    const excludedNames = await this.getExcludedCalendarNames(userId);
+    if (!excludedNames.length) return events;
+    return events.filter((event) => {
+      const summary = event.calendarSummary?.trim().toLowerCase();
+      return !summary || !excludedNames.includes(summary);
+    });
+  }
+
   private async rememberRecentDriveFiles(userId: string, files: DriveFileSummary[]): Promise<void> {
     const normalizedFiles = files
       .filter((file) => file.id)
@@ -1290,7 +1313,10 @@ export class ToolExecutor {
 
       if (toolName === "calendar_list_events") {
         const service = new CalendarService(auth);
-        const data = await service.listEvents(input);
+        const rawData = await service.listEvents(input);
+        const data = input.calendarId
+          ? rawData
+          : await this.applyCalendarExclusions(context.user.id, rawData);
         await this.rememberRecentCalendarEvents(context.user.id, data);
         return { ok: true, data };
       }

@@ -108,6 +108,59 @@ describe("long term memory", () => {
     );
   });
 
+  it("stores explicit calendar exclusion preferences", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "don't use events from the calendar called 'Kri School' in my daily digest"
+    );
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "calendar_exclusion_preferences" } },
+        update: {
+          value: { excludedCalendarNames: ["Kri School"] },
+          confidence: 0.9
+        }
+      })
+    );
+  });
+
+  it("merges calendar exclusion preferences", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => ({
+          value: { excludedCalendarNames: ["Kri School"] }
+        })),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "exclude Personal calendar from calendar summaries"
+    );
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: {
+          value: { excludedCalendarNames: ["Kri School", "Personal"] },
+          confidence: 0.9
+        }
+      })
+    );
+  });
+
   it("ignores invalid timezones", async () => {
     const upsert = vi.fn(async () => undefined);
     const update = vi.fn(async () => undefined);

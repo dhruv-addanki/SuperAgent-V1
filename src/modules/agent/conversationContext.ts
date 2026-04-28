@@ -75,6 +75,14 @@ export function buildConversationContext(input: {
       continue;
     }
 
+    if (entry.key === "calendar_exclusion_preferences") {
+      const excludedCalendarNames = calendarExclusionSummary(entry.value);
+      if (excludedCalendarNames) {
+        userPreferences.push(`Exclude calendars from generic calendar reads: ${excludedCalendarNames}`);
+      }
+      continue;
+    }
+
     if (entry.key === "preferred_email_tone") {
       const tone =
         entry.value &&
@@ -123,6 +131,14 @@ export function buildConversationContext(input: {
     communicationHints: Array.from(communicationHints).slice(0, 6),
     userPreferences: userPreferences.slice(0, 4)
   };
+}
+
+function calendarExclusionSummary(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const excluded = (value as { excludedCalendarNames?: unknown }).excludedCalendarNames;
+  if (!Array.isArray(excluded)) return null;
+  const names = excluded.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  return names.length ? names.join(", ") : null;
 }
 
 export function formatConversationContextForPrompt(context: ConversationContext): string {
