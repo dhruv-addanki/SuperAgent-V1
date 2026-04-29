@@ -412,6 +412,137 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("runs a one-time automation digest with fixed Gmail, Calendar, and My Tasks reads", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockImplementation(async (toolName: string) => {
+        if (toolName === "gmail_search_threads") {
+          return {
+            ok: true,
+            data: [
+              {
+                threadId: "thread_1",
+                subject: "SF86 correction",
+                from: "security@example.com",
+                snippet: "Please resubmit"
+              }
+            ]
+          };
+        }
+        if (toolName === "calendar_list_events") {
+          return {
+            ok: true,
+            data: []
+          };
+        }
+        if (toolName === "asana_list_my_tasks") {
+          return {
+            ok: true,
+            data: [
+              {
+                gid: "task_1",
+                name: "Systems Class Ex1 Due",
+                completed: false,
+                dueOn: "2026-04-20"
+              }
+            ]
+          };
+        }
+        return { ok: false, error: "unexpected tool" };
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: MessageRole.USER, content: "Do it manually yes" },
+          {
+            role: MessageRole.ASSISTANT,
+            content:
+              "I can do the same checks manually right now, but I can’t trigger the scheduled automation itself on demand.\n\nWant me to run the one-time digest now?"
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Do it manually yes"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "gmail_search_threads",
+      expect.objectContaining({
+        query: "in:inbox newer_than:1d",
+        maxResults: 10
+      }),
+      expect.objectContaining({ latestUserMessage: "Do it manually yes" }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "calendar_list_events",
+      expect.objectContaining({ maxResults: 50 }),
+      expect.objectContaining({ latestUserMessage: "Do it manually yes" }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.not.objectContaining({ projectGid: expect.anything() }),
+      expect.objectContaining({ latestUserMessage: "Do it manually yes" }),
+      { force: true }
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Morning email, calendar, and Asana digest")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("SF86 correction")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Systems Class Ex1 Due")
+    );
+    expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("I couldn't identify that Asana project")
+    );
+  });
+
   it("returns setup status for explicit setup requests without calling the model", async () => {
     const prisma = {
       user: {

@@ -269,6 +269,21 @@ export class AgentOrchestrator {
         if (handled) return;
       }
 
+      const oneTimeAutomationDigest = matchOneTimeAutomationDigestRequest(
+        preparedInput.text,
+        history
+      );
+      if (shouldUseTextShortcuts && oneTimeAutomationDigest) {
+        await replyToUser(
+          await this.runOneTimeMorningDigest({
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          })
+        );
+        return;
+      }
+
       const missingAutomationRetry = matchMissingAutomationDigestRetry(preparedInput.text, history);
       if (shouldUseTextShortcuts && missingAutomationRetry) {
         const calendarWindow = calendarOverviewWindow("today", user.timezone);
@@ -847,6 +862,53 @@ export class AgentOrchestrator {
     return true;
   }
 
+  private async runOneTimeMorningDigest(input: {
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<string> {
+    const calendarWindow = calendarOverviewWindow("today", input.user.timezone);
+    const [gmailResult, calendarResult, asanaResult] = await Promise.all([
+      this.toolExecutor.executeToolCall(
+        "gmail_search_threads",
+        {
+          query: "in:inbox newer_than:1d",
+          maxResults: 10
+        },
+        input,
+        { force: true }
+      ),
+      this.toolExecutor.executeToolCall(
+        "calendar_list_events",
+        {
+          timeMin: calendarWindow.timeMin,
+          timeMax: calendarWindow.timeMax,
+          maxResults: 50
+        },
+        input,
+        { force: true }
+      ),
+      this.toolExecutor.executeToolCall(
+        "asana_list_my_tasks",
+        {
+          completed: false,
+          limit: 50,
+          sortBy: "due",
+          sortDirection: "asc"
+        },
+        input,
+        { force: true }
+      )
+    ]);
+
+    return formatOneTimeMorningDigest({
+      gmailResult,
+      calendarResult,
+      asanaResult,
+      timezone: input.user.timezone
+    });
+  }
+
   private async reply(conversationId: string, to: string, message: string): Promise<void> {
     const safeMessage = normalizeAssistantMessageForUser(message);
     await persistMessage(this.prisma, {
@@ -870,6 +932,29 @@ function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {
 function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): string {
   const hint = formatSetupHintForWhatsApp(setupStatus);
   return message.includes(hint) ? message : `${message}\n\n${hint}`;
+}
+
+function matchOneTimeAutomationDigestRequest(text: string, history: ResponseInputItem[]): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").trim();
+
+  const directRun =
+    /\b(run|do|trigger|start)\b.*\b(?:8\s*am|morning|daily)?\s*(?:automation|digest)\b.*\b(now|manual|manually|one[ -]?time|exception)\b/.test(
+      normalized
+    ) || /\b(run|do)\b.*\b(one[ -]?time|manual|manually)\b.*\b(digest|checks?)\b/.test(normalized);
+  if (directRun) return true;
+
+  const previousAssistant = lastAssistantMessage(history);
+  if (!previousAssistant) return false;
+  const previous = previousAssistant.toLowerCase().replace(/[’]/g, "'");
+  const offeredManualDigest =
+    /\bsame checks manually\b/.test(previous) || /\bone[ -]?time digest now\b/.test(previous);
+  if (!offeredManualDigest) return false;
+
+  return (
+    /^(yes|yep|yeah|sure|ok|okay|do it|go ahead)\b/.test(normalized) ||
+    /\bdo it manually\b/.test(normalized) ||
+    /\brun it\b/.test(normalized)
+  );
 }
 
 function matchMissingAutomationDigestRetry(
@@ -967,6 +1052,112 @@ function formatMissingAutomationRetryReply(input: {
   }
 
   return sections.join("\n\n");
+}
+
+function formatOneTimeMorningDigest(input: {
+  gmailResult: ToolExecutionResult;
+  calendarResult: ToolExecutionResult;
+  asanaResult: ToolExecutionResult;
+  timezone: string;
+}): string {
+  const sections = [
+    "Morning email, calendar, and Asana digest",
+    `At a glance: ${formatOneTimeDigestGlance(input)}`
+  ];
+
+  if (input.gmailResult.ok) {
+    sections.push(["Gmail:", formatGmailRetrySnapshot(input.gmailResult.data)].join("\n"));
+  }
+
+  if (input.calendarResult.ok) {
+    sections.push(
+      [
+        "Schedule:",
+        formatCalendarOverview(
+          (input.calendarResult.data as CalendarEventSummary[] | undefined) ?? [],
+          input.timezone,
+          "today"
+        )
+      ].join("\n")
+    );
+  }
+
+  if (input.asanaResult.ok) {
+    sections.push(
+      [
+        "Asana:",
+        formatScopedAsanaTaskList(
+          (input.asanaResult.data as AsanaTaskSummary[] | undefined) ?? [],
+          {
+            label: "from My Tasks",
+            emptyLabel: "I don't see any open Asana tasks in My Tasks.",
+            emphasizeImportance: true
+          }
+        )
+      ].join("\n")
+    );
+  }
+
+  const watchouts = formatOneTimeDigestWatchouts(input);
+  if (watchouts.length) {
+    sections.push(["Watchouts:", ...watchouts.map((watchout) => `• ${watchout}`)].join("\n"));
+  }
+
+  return sections.join("\n\n");
+}
+
+function formatOneTimeDigestGlance(input: {
+  gmailResult: ToolExecutionResult;
+  calendarResult: ToolExecutionResult;
+  asanaResult: ToolExecutionResult;
+}): string {
+  const parts = [
+    input.gmailResult.ok
+      ? `Gmail found ${countItems(input.gmailResult.data)} recent ${plural(countItems(input.gmailResult.data), "thread")}`
+      : "Gmail is unavailable",
+    input.calendarResult.ok
+      ? `${countItems(input.calendarResult.data)} calendar ${plural(countItems(input.calendarResult.data), "event")} today`
+      : "calendar is unavailable",
+    input.asanaResult.ok
+      ? `${countItems(input.asanaResult.data)} open Asana ${plural(countItems(input.asanaResult.data), "task")}`
+      : "Asana is unavailable"
+  ];
+
+  return `${parts.join(", ")}.`;
+}
+
+function formatOneTimeDigestWatchouts(input: {
+  gmailResult: ToolExecutionResult;
+  calendarResult: ToolExecutionResult;
+  asanaResult: ToolExecutionResult;
+}): string[] {
+  return [
+    input.gmailResult.ok
+      ? null
+      : `Gmail: ${
+          input.gmailResult.userMessage ??
+          "I couldn't load recent inbox threads for this one-time digest."
+        }`,
+    input.calendarResult.ok
+      ? null
+      : `Calendar: ${
+          input.calendarResult.userMessage ??
+          "I couldn't load today's calendar for this one-time digest."
+        }`,
+    input.asanaResult.ok
+      ? null
+      : `Asana: ${
+          input.asanaResult.userMessage ?? "I couldn't load open My Tasks for this one-time digest."
+        }`
+  ].filter((watchout): watchout is string => Boolean(watchout));
+}
+
+function countItems(data: unknown): number {
+  return Array.isArray(data) ? data.length : 0;
+}
+
+function plural(count: number, noun: string): string {
+  return count === 1 ? noun : `${noun}s`;
 }
 
 function previousDigestSourceFailed(previous: string, sourcePatterns: RegExp[]): boolean {
