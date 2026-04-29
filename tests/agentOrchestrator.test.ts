@@ -19,10 +19,12 @@ describe("agent orchestrator", () => {
   });
 
   it("does not require Google to be connected before handling Asana requests", async () => {
-    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall").mockResolvedValue({
-      ok: true,
-      data: [{ gid: "task_1", name: "Asana task", completed: false }]
-    });
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [{ gid: "task_1", name: "Asana task", completed: false }]
+      });
 
     const prisma = {
       user: {
@@ -295,6 +297,114 @@ describe("agent orchestrator", () => {
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       expect.stringContaining("Review launch plan")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("I couldn't reach Google Calendar right now.")
+    );
+  });
+
+  it("retries Gmail and Calendar without relisting Asana when Asana was only context", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockImplementation(async (toolName: string) => {
+        if (toolName === "gmail_search_threads") {
+          return {
+            ok: true,
+            data: [
+              {
+                threadId: "thread_1",
+                subject: "Launch update",
+                from: "pm@example.com",
+                snippet: "Today looks good"
+              }
+            ]
+          };
+        }
+        if (toolName === "calendar_list_events") {
+          return {
+            ok: false,
+            error: "GOOGLE_API_ERROR",
+            userMessage: "I couldn't reach Google Calendar right now."
+          };
+        }
+        return { ok: false, error: "unexpected tool" };
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          { role: MessageRole.USER, content: "yes retry the missing parts" },
+          {
+            role: MessageRole.ASSISTANT,
+            content:
+              "Morning email, calendar, and Asana digest\n\nAt a glance: Gmail and calendar didn’t load, so this is an Asana-led snapshot. No same-day due tasks shown, but you’ve got a backlog of overdue items.\n\nSchedule: Calendar data was unavailable for this run."
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "yes retry the missing parts"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "gmail_search_threads",
+      expect.objectContaining({
+        query: "in:inbox newer_than:1d",
+        maxResults: 10
+      }),
+      expect.objectContaining({ latestUserMessage: "yes retry the missing parts" })
+    );
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "calendar_list_events",
+      expect.objectContaining({ maxResults: 50 }),
+      expect.objectContaining({ latestUserMessage: "yes retry the missing parts" })
+    );
+    expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Launch update")
     );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",

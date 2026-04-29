@@ -1190,19 +1190,10 @@ export class ToolExecutor {
         }
       }
 
-      const auth = await this.googleTokenService.getOAuthClientForUser(context.user, {
-        requiredScopes:
-          toolName === "calendar_list_calendars" ||
-          (toolName === "calendar_list_events" && !input.calendarId)
-            ? ["https://www.googleapis.com/auth/calendar.calendarlist.readonly"]
-            : toolName === "drive_delete_file"
-              ? ["https://www.googleapis.com/auth/drive"]
-              : [],
-        reconnectReason:
-          toolName === "drive_delete_file"
-            ? "Reconnect your Google account to delete Drive files"
-            : "Reconnect your Google account to access all of your calendars by name"
-      });
+      const auth = await this.googleTokenService.getOAuthClientForUser(
+        context.user,
+        googleAuthRequirements(toolName, input)
+      );
 
       if (toolName === "gmail_search_threads") {
         const service = new GmailService(auth);
@@ -1497,4 +1488,70 @@ function defaultToolFailureMessage(toolName: ToolName): string {
     return "I couldn't complete that web lookup right now. Try again in a moment.";
   }
   return "I hit a problem handling that. Please try again.";
+}
+
+function googleAuthRequirements(
+  toolName: ToolName,
+  input: any
+): { requiredScopes?: string[]; reconnectReason?: string } {
+  if (toolName === "gmail_search_threads" || toolName === "gmail_read_thread") {
+    return {
+      requiredScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+      reconnectReason: "Reconnect your Google account to read Gmail"
+    };
+  }
+
+  if (toolName === "gmail_create_draft") {
+    return {
+      requiredScopes: ["https://www.googleapis.com/auth/gmail.compose"],
+      reconnectReason: "Reconnect your Google account to create Gmail drafts"
+    };
+  }
+
+  if (toolName === "gmail_send_draft") {
+    return {
+      requiredScopes: ["https://www.googleapis.com/auth/gmail.send"],
+      reconnectReason: "Reconnect your Google account to send Gmail drafts"
+    };
+  }
+
+  if (toolName === "gmail_trash_thread") {
+    return {
+      requiredScopes: ["https://www.googleapis.com/auth/gmail.modify"],
+      reconnectReason: "Reconnect your Google account to modify Gmail"
+    };
+  }
+
+  if (toolName === "calendar_list_calendars" || toolName === "calendar_list_events") {
+    return {
+      requiredScopes: [
+        input.calendarId
+          ? "https://www.googleapis.com/auth/calendar.readonly"
+          : "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+      ],
+      reconnectReason: input.calendarId
+        ? "Reconnect your Google account to read Google Calendar"
+        : "Reconnect your Google account to access all of your calendars by name"
+    };
+  }
+
+  if (
+    toolName === "calendar_create_event" ||
+    toolName === "calendar_update_event" ||
+    toolName === "calendar_delete_event"
+  ) {
+    return {
+      requiredScopes: ["https://www.googleapis.com/auth/calendar.events"],
+      reconnectReason: "Reconnect your Google account to manage Google Calendar events"
+    };
+  }
+
+  if (toolName === "drive_delete_file") {
+    return {
+      requiredScopes: ["https://www.googleapis.com/auth/drive"],
+      reconnectReason: "Reconnect your Google account to delete Drive files"
+    };
+  }
+
+  return {};
 }

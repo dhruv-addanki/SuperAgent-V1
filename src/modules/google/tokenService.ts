@@ -75,7 +75,14 @@ export class GoogleTokenService {
       !account.expiryDate || account.expiryDate.getTime() < Date.now() + 2 * 60_000;
 
     if (expiresSoon) {
-      await oauthClient.getAccessToken();
+      try {
+        await oauthClient.getAccessToken();
+      } catch {
+        throw new ReauthRequiredError(
+          this.getConnectUrl(user.whatsappPhone),
+          options.reconnectReason ?? "Reconnect your Google account to continue"
+        );
+      }
       const credentials = oauthClient.credentials;
       if (credentials.access_token || credentials.expiry_date) {
         await this.prisma.googleAccount.update({

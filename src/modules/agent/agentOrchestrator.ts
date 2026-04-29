@@ -70,7 +70,7 @@ import {
   matchGenericCalendarOverviewRequest
 } from "./calendarReadShortcut";
 import type { AsanaTaskSummary } from "../asana/asanaTypes";
-import type { CalendarEventSummary } from "../google/googleTypes";
+import type { CalendarEventSummary, GmailThreadSummary } from "../google/googleTypes";
 
 export interface InboundWhatsAppTextInput {
   from: string;
@@ -272,7 +272,21 @@ export class AgentOrchestrator {
       const missingAutomationRetry = matchMissingAutomationDigestRetry(preparedInput.text, history);
       if (shouldUseTextShortcuts && missingAutomationRetry) {
         const calendarWindow = calendarOverviewWindow("today", user.timezone);
-        const [calendarResult, asanaResult] = await Promise.all([
+        const [gmailResult, calendarResult, asanaResult] = await Promise.all([
+          missingAutomationRetry.gmail
+            ? this.toolExecutor.executeToolCall(
+                "gmail_search_threads",
+                {
+                  query: "in:inbox newer_than:1d",
+                  maxResults: 10
+                },
+                {
+                  user,
+                  conversation,
+                  latestUserMessage: preparedInput.text
+                }
+              )
+            : Promise.resolve(null),
           missingAutomationRetry.calendar
             ? this.toolExecutor.executeToolCall(
                 "calendar_list_events",
@@ -308,6 +322,7 @@ export class AgentOrchestrator {
 
         await replyToUser(
           formatMissingAutomationRetryReply({
+            gmailResult,
             calendarResult,
             asanaResult,
             timezone: user.timezone
@@ -860,38 +875,53 @@ function appendSetupHintToMessage(message: string, setupStatus: SetupStatus): st
 function matchMissingAutomationDigestRetry(
   text: string,
   history: ResponseInputItem[]
-): { calendar: boolean; asana: boolean } | null {
+): { gmail: boolean; calendar: boolean; asana: boolean } | null {
   const normalized = text.toLowerCase().replace(/[’]/g, "'").trim();
   const asksRetry =
-    /^(yes|yep|yeah|sure|ok|okay)\b.*\b(retry|try again|missing|calendar|asana|parts?)\b/.test(
+    /^(yes|yep|yeah|sure|ok|okay)\b.*\b(retry|try again|missing|gmail|email|mail|calendar|asana|parts?)\b/.test(
       normalized
-    ) || /\b(retry|try again)\b.*\b(missing|calendar|asana|parts?)\b/.test(normalized);
+    ) ||
+    /\b(retry|try again)\b.*\b(missing|gmail|email|mail|calendar|asana|parts?)\b/.test(normalized);
   if (!asksRetry) return null;
 
   const previousAssistant = lastAssistantMessage(history);
   if (!previousAssistant) return null;
-  const previous = previousAssistant.toLowerCase();
+  const previous = previousAssistant.toLowerCase().replace(/[’]/g, "'");
   if (!/morning digest|automation|digest/.test(previous)) return null;
 
-  const calendar =
-    /\bcalendar\b/.test(previous) &&
-    /\b(couldn'?t|could not|unavailable|failed|missing|unable|reach)\b/.test(previous);
-  const asana =
-    /\basana\b/.test(previous) &&
-    /\b(couldn'?t|could not|unavailable|failed|missing|unable|issue|rejected|resolution)\b/.test(
-      previous
-    );
+  const gmail = previousDigestSourceFailed(previous, [
+    /\bgmail\b/,
+    /\bemail\b/,
+    /\bemails\b/,
+    /\binbox\b/
+  ]);
+  const calendar = previousDigestSourceFailed(previous, [/\bcalendar\b/, /\bschedule\b/]);
+  const asana = previousDigestSourceFailed(previous, [/\basana\b/, /\bmy tasks\b/]);
 
-  if (!calendar && !asana) return null;
-  return { calendar, asana };
+  if (!gmail && !calendar && !asana) return null;
+  return { gmail, calendar, asana };
 }
 
 function formatMissingAutomationRetryReply(input: {
+  gmailResult: ToolExecutionResult | null;
   calendarResult: ToolExecutionResult | null;
   asanaResult: ToolExecutionResult | null;
   timezone: string;
 }): string {
   const sections = ["Retried the missing parts."];
+
+  if (input.gmailResult) {
+    if (input.gmailResult.ok) {
+      sections.push(["Gmail:", formatGmailRetrySnapshot(input.gmailResult.data)].join("\n"));
+    } else {
+      sections.push(
+        `Gmail: ${
+          input.gmailResult.userMessage ??
+          "I still couldn't reach Gmail, so recent inbox threads are unavailable."
+        }`
+      );
+    }
+  }
 
   if (input.calendarResult) {
     if (input.calendarResult.ok) {
@@ -937,6 +967,60 @@ function formatMissingAutomationRetryReply(input: {
   }
 
   return sections.join("\n\n");
+}
+
+function previousDigestSourceFailed(previous: string, sourcePatterns: RegExp[]): boolean {
+  const sourcePattern = sourcePatterns.map((pattern) => pattern.source).join("|");
+  const failurePattern =
+    /\b(?:didn'?t load|did not load|couldn'?t|could not|was unavailable|were unavailable|unavailable|failed|missing|unable|reconnect|permission|auth|resolution issue)\b/i;
+  const sourceAfterFailure = new RegExp(
+    `\\b(?:couldn'?t|could not|unable to|failed to)\\s+(?:load|reach|pull|read|access|complete)[^.\\n]{0,40}(?:${sourcePattern})\\b`,
+    "i"
+  );
+  if (sourceAfterFailure.test(previous)) return true;
+
+  const segments = previous
+    .split(/[.;\n]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return segments.some((segment) => {
+    const labeledSourceFailure = new RegExp(
+      `^(?:[-*•]\\s*)?(?:${sourcePattern})\\s*:\\s*.*\\b(?:couldn'?t|could not|unavailable|failed|missing|unable|reconnect|permission|auth|resolution issue)\\b`,
+      "i"
+    );
+    if (labeledSourceFailure.test(segment)) return true;
+
+    const failureMatch = failurePattern.exec(segment);
+    if (!failureMatch || failureMatch.index === undefined) return false;
+
+    const sourceRegex = new RegExp(`(?:${sourcePattern})`, "gi");
+    for (const sourceMatch of segment.matchAll(sourceRegex)) {
+      if (sourceMatch.index === undefined || sourceMatch.index > failureMatch.index) continue;
+      const between = segment.slice(sourceMatch.index + sourceMatch[0].length, failureMatch.index);
+      if (!/\b(?:loaded|available|worked|succeeded|included|snapshot|led)\b/i.test(between)) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+}
+
+function formatGmailRetrySnapshot(data: unknown): string {
+  const threads = Array.isArray(data) ? (data as GmailThreadSummary[]) : [];
+  if (!threads.length) {
+    return "No recent inbox threads found.";
+  }
+
+  const lines = threads.slice(0, 10).map((thread, index) => {
+    const subject = thread.subject?.trim() || "(No subject)";
+    const from = thread.from?.trim() ? ` from ${thread.from.trim()}` : "";
+    const date = thread.date?.trim() ? ` at ${thread.date.trim()}` : "";
+    const snippet = thread.snippet?.trim() ? `: ${thread.snippet.trim()}` : "";
+    return `${index + 1}. ${subject}${from}${date}${snippet}`;
+  });
+
+  return `Found ${threads.length} recent inbox ${threads.length === 1 ? "thread" : "threads"}.\n${lines.join("\n")}`;
 }
 
 function lastAssistantMessage(history: ResponseInputItem[]): string | null {

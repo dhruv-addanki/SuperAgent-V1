@@ -147,6 +147,13 @@ describe("tool executor email draft flow", () => {
 
     expect(result.ok).toBe(true);
     expect(searchThreadsMock).toHaveBeenCalledWith("is:unread important", 5);
+    expect(tokenService.getOAuthClientForUser).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        requiredScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+        reconnectReason: "Reconnect your Google account to read Gmail"
+      })
+    );
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledOnce();
   });
 
