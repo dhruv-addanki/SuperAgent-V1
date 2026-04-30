@@ -298,7 +298,8 @@ export class ToolExecutor {
     if (!Array.isArray(excluded)) return [];
     return excluded
       .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
-      .map((value) => value.trim().toLowerCase());
+      .map(normalizeCalendarExclusionText)
+      .filter(Boolean);
   }
 
   private async applyCalendarExclusions(
@@ -307,10 +308,7 @@ export class ToolExecutor {
   ): Promise<CalendarEventSummary[]> {
     const excludedNames = await this.getExcludedCalendarNames(userId);
     if (!excludedNames.length) return events;
-    return events.filter((event) => {
-      const summary = event.calendarSummary?.trim().toLowerCase();
-      return !summary || !excludedNames.includes(summary);
-    });
+    return events.filter((event) => !calendarEventMatchesExclusion(event, excludedNames));
   }
 
   private async rememberRecentDriveFiles(userId: string, files: DriveFileSummary[]): Promise<void> {
@@ -1760,6 +1758,43 @@ function defaultToolFailureMessage(toolName: ToolName): string {
     return "I couldn't complete that web lookup right now. Try again in a moment.";
   }
   return "I hit a problem handling that. Please try again.";
+}
+
+function calendarEventMatchesExclusion(
+  event: CalendarEventSummary,
+  excludedNames: string[]
+): boolean {
+  const candidates = [event.calendarSummary, event.calendarId, event.title]
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .map(normalizeCalendarExclusionText)
+    .filter(Boolean);
+
+  if (!candidates.length) return false;
+
+  return excludedNames.some((excludedName) => {
+    const excludedCompact = compactCalendarExclusionText(excludedName);
+    return candidates.some((candidate) => {
+      const candidateCompact = compactCalendarExclusionText(candidate);
+      return (
+        candidate === excludedName ||
+        candidate.includes(excludedName) ||
+        candidateCompact.includes(excludedCompact)
+      );
+    });
+  });
+}
+
+function normalizeCalendarExclusionText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactCalendarExclusionText(value: string): string {
+  return value.replace(/\s+/g, "");
 }
 
 function googleAuthRequirements(

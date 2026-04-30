@@ -198,7 +198,10 @@ export class LongTermMemory {
     });
   }
 
-  private async rememberExcludedCalendarNames(userId: string, calendarNames: string[]): Promise<void> {
+  private async rememberExcludedCalendarNames(
+    userId: string,
+    calendarNames: string[]
+  ): Promise<void> {
     const existing = await this.prisma.memoryEntry.findUnique({
       where: { userId_key: { userId, key: "calendar_exclusion_preferences" } }
     });
@@ -213,8 +216,10 @@ export class LongTermMemory {
         : [];
     const merged = Array.from(
       new Map(
-        [...existingNames, ...calendarNames.map(normalizeCalendarNameForStorage).filter(Boolean)]
-          .map((name) => [name.toLowerCase(), name])
+        [
+          ...existingNames,
+          ...calendarNames.map(normalizeCalendarNameForStorage).filter(Boolean)
+        ].map((name) => [name.toLowerCase(), name])
       ).values()
     );
 
@@ -341,10 +346,15 @@ function extractAssistantResponsePreferences(text: string): AssistantResponsePre
 
 function extractExcludedCalendarNames(text: string): string[] {
   const normalized = text.toLowerCase().replace(/[’]/g, "'");
-  const hasCalendarSignal = /\b(cal|calendar|calendars)\b/.test(normalized);
+  const hasCalendarSignal =
+    /\b(cal|calendar|calendars|events?|schedule|agenda|digest|digests?|summaries|summary)\b/.test(
+      normalized
+    );
   const hasExclusionSignal =
     /\b(don't|dont|do not|never|exclude|ignore|skip|leave out|disinclude)\b/.test(normalized) &&
-    /\b(use|include|show|pull|read|count|calendar|calendars)\b/.test(normalized);
+    /\b(use|include|show|pull|read|count|calendar|calendars|events?|schedule|agenda|digest|digests?|summaries|summary)\b/.test(
+      normalized
+    );
   if (!hasCalendarSignal || !hasExclusionSignal) return [];
 
   const names = new Set<string>();
@@ -365,7 +375,9 @@ function extractExcludedCalendarNames(text: string): string[] {
   if (!names.size) {
     const unquotedPatterns = [
       /\b(?:exclude|ignore|skip|leave out|disinclude)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+calendar\b/gi,
-      /\b(?:don't|dont|do not|never)\s+(?:use|include|show|pull|read|count)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+calendar\b/gi
+      /\b(?:don't|dont|do not|never)\s+(?:use|include|show|pull|read|count)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+calendar\b/gi,
+      /\b(?:exclude|ignore|skip|leave out|disinclude)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+from\s+(?:my\s+)?(?:basic\s+)?(?:summaries|summary|digests?|daily digest|morning digest|calendar summaries|schedule|agenda)\b/gi,
+      /\b(?:don't|dont|do not|never)\s+(?:use|include|show|pull|read|count)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9 &'._-]{1,80}?)\s+(?:in|for|from)\s+(?:my\s+)?(?:basic\s+)?(?:summaries|summary|digests?|daily digest|morning digest|calendar summaries|schedule|agenda)\b/gi
     ];
 
     for (const pattern of unquotedPatterns) {
@@ -384,6 +396,7 @@ function normalizeCalendarNameForStorage(value: string): string {
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/\s+/g, " ")
+    .replace(/\s+calendar$/i, "")
     .replace(/[.,!?;:]+$/g, "")
     .trim();
 }

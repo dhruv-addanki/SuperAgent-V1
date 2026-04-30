@@ -134,6 +134,32 @@ describe("long term memory", () => {
     );
   });
 
+  it("stores digest exclusion preferences as calendar exclusions", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "exclude kri school from basic summaries and digest"
+    );
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "calendar_exclusion_preferences" } },
+        update: {
+          value: { excludedCalendarNames: ["kri school"] },
+          confidence: 0.9
+        }
+      })
+    );
+  });
+
   it("merges calendar exclusion preferences", async () => {
     const upsert = vi.fn(async () => undefined);
     const service = new LongTermMemory({
