@@ -12,6 +12,11 @@ export interface AsanaProjectSummary {
   archived?: boolean;
 }
 
+export interface AsanaTeamSummary {
+  gid: string;
+  name: string;
+}
+
 export interface AsanaUserSummary {
   gid: string;
   name: string;

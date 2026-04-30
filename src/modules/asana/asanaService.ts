@@ -2,6 +2,7 @@ import { ExternalApiError, UserFacingError } from "../../lib/errors";
 import type {
   AsanaDeletedTaskResult,
   AsanaProjectSummary,
+  AsanaTeamSummary,
   AsanaTaskDetail,
   AsanaTaskSummary,
   AsanaUserSummary,
@@ -28,6 +29,7 @@ const TASK_FIELDS = [
 ].join(",");
 const WORKSPACE_FIELDS = ["gid", "name", "is_organization"].join(",");
 const PROJECT_FIELDS = ["gid", "name", "archived", "workspace.gid", "workspace.name"].join(",");
+const TEAM_FIELDS = ["gid", "name"].join(",");
 const USER_FIELDS = ["gid", "name", "email"].join(",");
 
 function normalizeWorkspace(workspace: any): AsanaWorkspaceSummary {
@@ -45,6 +47,13 @@ function normalizeProject(project: any): AsanaProjectSummary {
     workspaceGid: project.workspace?.gid ?? undefined,
     workspaceName: project.workspace?.name ?? undefined,
     archived: project.archived ?? undefined
+  };
+}
+
+function normalizeTeam(team: any): AsanaTeamSummary {
+  return {
+    gid: team.gid ?? "",
+    name: team.name ?? "(Unnamed team)"
   };
 }
 
@@ -88,17 +97,17 @@ function matchesNameQuery(name: string, query?: string): boolean {
 function dueTimestamp(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">): number {
   const value = task.dueAt ?? task.dueOn;
   if (!value) return Number.MAX_SAFE_INTEGER;
-  const timestamp =
-    /^\d{4}-\d{2}-\d{2}$/.test(value) ? Date.parse(`${value}T23:59:59.999Z`) : Date.parse(value);
+  const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? Date.parse(`${value}T23:59:59.999Z`)
+    : Date.parse(value);
   return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
 }
 
 function beforeDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueBefore?: string): boolean {
   if (!dueBefore) return true;
-  const filterTimestamp =
-    /^\d{4}-\d{2}-\d{2}$/.test(dueBefore)
-      ? Date.parse(`${dueBefore}T23:59:59.999Z`)
-      : Date.parse(dueBefore);
+  const filterTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(dueBefore)
+    ? Date.parse(`${dueBefore}T23:59:59.999Z`)
+    : Date.parse(dueBefore);
   if (Number.isNaN(filterTimestamp)) return true;
   return dueTimestamp(task) <= filterTimestamp;
 }
@@ -136,6 +145,17 @@ export class AsanaService {
     );
   }
 
+  async listTeams(workspaceGid: string): Promise<AsanaTeamSummary[]> {
+    const data = await this.request<any[]>(`/organizations/${workspaceGid}/teams`, {
+      query: {
+        limit: "100",
+        opt_fields: TEAM_FIELDS
+      }
+    });
+
+    return sortByName(data.map(normalizeTeam).filter((team) => team.gid));
+  }
+
   async listUsers(workspaceGid: string, query?: string): Promise<AsanaUserSummary[]> {
     const data = await this.request<any[]>(`/workspaces/${workspaceGid}/users`, {
       query: {
@@ -151,7 +171,6 @@ export class AsanaService {
 
   async listMyTasks(input: {
     workspaceGid?: string;
-    projectGid?: string;
     completed?: boolean;
     dueBefore?: string;
     limit?: number;
@@ -159,43 +178,56 @@ export class AsanaService {
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
     const pageSize = Math.min(Math.max(limit * 3, 25), 100);
 
-    let data: any[];
-    if (input.projectGid) {
-      data = await this.request<any[]>(`/projects/${input.projectGid}/tasks`, {
-        query: {
-          limit: String(pageSize),
-          opt_fields: TASK_FIELDS,
-          completed_since: input.completed === false ? "now" : undefined
-        }
-      });
-    } else {
-      if (!input.workspaceGid) {
-        throw new UserFacingError(
-          "Missing Asana workspace",
-          "ASANA_WORKSPACE_REQUIRED",
-          "Choose an Asana workspace first."
-        );
-      }
-
-      const userTaskList = await this.request<{ gid?: string }>("/users/me/user_task_list", {
-        query: {
-          workspace: input.workspaceGid,
-          opt_fields: "gid"
-        }
-      });
-
-      if (!userTaskList.gid) {
-        throw new Error("Asana did not return a user task list ID");
-      }
-
-      data = await this.request<any[]>(`/user_task_lists/${userTaskList.gid}/tasks`, {
-        query: {
-          limit: String(pageSize),
-          opt_fields: TASK_FIELDS,
-          completed_since: input.completed === false ? "now" : undefined
-        }
-      });
+    if (!input.workspaceGid) {
+      throw new UserFacingError(
+        "Missing Asana workspace",
+        "ASANA_WORKSPACE_REQUIRED",
+        "Choose an Asana workspace first."
+      );
     }
+
+    const userTaskList = await this.request<{ gid?: string }>("/users/me/user_task_list", {
+      query: {
+        workspace: input.workspaceGid,
+        opt_fields: "gid"
+      }
+    });
+
+    if (!userTaskList.gid) {
+      throw new Error("Asana did not return a user task list ID");
+    }
+
+    const data = await this.request<any[]>(`/user_task_lists/${userTaskList.gid}/tasks`, {
+      query: {
+        limit: String(pageSize),
+        opt_fields: TASK_FIELDS,
+        completed_since: input.completed === false ? "now" : undefined
+      }
+    });
+
+    return data
+      .map(normalizeTask)
+      .filter((task) => task.gid)
+      .filter((task) => (input.completed === undefined ? true : task.completed === input.completed))
+      .filter((task) => beforeDue(task, input.dueBefore))
+      .slice(0, limit);
+  }
+
+  async listProjectTasks(input: {
+    projectGid: string;
+    completed?: boolean;
+    dueBefore?: string;
+    limit?: number;
+  }): Promise<AsanaTaskSummary[]> {
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+    const pageSize = Math.min(Math.max(limit * 3, 25), 100);
+    const data = await this.request<any[]>(`/projects/${input.projectGid}/tasks`, {
+      query: {
+        limit: String(pageSize),
+        opt_fields: TASK_FIELDS,
+        completed_since: input.completed === false ? "now" : undefined
+      }
+    });
 
     return data
       .map(normalizeTask)
