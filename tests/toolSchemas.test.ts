@@ -28,6 +28,7 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "asana_create_task")).toBe(false);
     expect(tools.some((tool) => tool.name === "asana_update_task")).toBe(false);
     expect(tools.some((tool) => tool.name === "asana_delete_task")).toBe(false);
+    expect(tools.some((tool) => tool.name === "asana_bulk_update_tasks")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_create_page")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_append_page")).toBe(false);
     expect(tools.some((tool) => tool.name === "notion_update_page_title")).toBe(false);
@@ -50,6 +51,7 @@ describe("tool schemas", () => {
     expect(() =>
       toolInputSchemas.asana_update_task.parse({
         taskGid: "123",
+        taskName: "Duplicate target",
         dueOn: "tomorrow"
       })
     ).toThrow();
@@ -64,9 +66,54 @@ describe("tool schemas", () => {
 
     expect(
       toolInputSchemas.asana_delete_task.parse({
-        taskGid: "123"
+        taskName: "Apply Brand Deals"
+      }).taskName
+    ).toBe("Apply Brand Deals");
+
+    expect(() =>
+      toolInputSchemas.asana_delete_task.parse({
+        taskGid: "123",
+        taskName: "Apply Brand Deals"
+      })
+    ).toThrow();
+  });
+
+  it("validates Asana project name and ID resolution inputs", () => {
+    expect(() =>
+      toolInputSchemas.asana_list_my_tasks.parse({
+        projectGid: "Scanis"
+      })
+    ).toThrow();
+
+    expect(
+      toolInputSchemas.asana_list_project_tasks.parse({
+        projectName: "Scanis",
+        completed: false
+      }).projectName
+    ).toBe("Scanis");
+
+    expect(() =>
+      toolInputSchemas.asana_list_project_tasks.parse({
+        projectGid: "123",
+        projectName: "Scanis"
+      })
+    ).toThrow();
+
+    expect(() => toolInputSchemas.asana_list_project_tasks.parse({ completed: false })).toThrow();
+
+    expect(
+      toolInputSchemas.asana_create_task.parse({
+        name: "Update wellness score",
+        projectNames: ["Scanis"]
+      }).projectNames
+    ).toEqual(["Scanis"]);
+
+    expect(
+      toolInputSchemas.asana_search_tasks.parse({
+        text: "wellness score",
+        projectName: "Scanis"
       }).taskGid
-    ).toBe("123");
+    ).toBeUndefined();
 
     expect(
       toolInputSchemas.asana_list_project_tasks.parse({
@@ -75,6 +122,29 @@ describe("tool schemas", () => {
         limit: 5
       }).dueOn
     ).toBe("2026-04-22");
+  });
+
+  it("validates guarded Asana bulk completion inputs", () => {
+    expect(
+      toolInputSchemas.asana_bulk_update_tasks.parse({
+        taskGids: ["task_1"],
+        completed: true
+      }).completed
+    ).toBe(true);
+
+    expect(() =>
+      toolInputSchemas.asana_bulk_update_tasks.parse({
+        taskGids: ["task_1"],
+        completed: false
+      })
+    ).toThrow();
+
+    expect(() =>
+      toolInputSchemas.asana_bulk_update_tasks.parse({
+        taskGids: Array.from({ length: 26 }, (_, index) => `task_${index + 1}`),
+        completed: true
+      })
+    ).toThrow();
   });
 
   it("validates Notion page inputs", () => {

@@ -38,6 +38,21 @@ const automationSchedule = z
     }
   });
 
+function requireExactlyOne(
+  input: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+  fields: [string, string]
+): void {
+  const present = fields.filter((field) => input[field] !== undefined);
+  if (present.length !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: fields,
+      message: `Provide exactly one of ${fields[0]} or ${fields[1]}.`
+    });
+  }
+}
+
 export const toolInputSchemas = {
   gmail_search_threads: z
     .object({
@@ -169,21 +184,21 @@ export const toolInputSchemas = {
 
   asana_list_projects: z
     .object({
-      workspaceGid: z.string().min(1),
+      workspaceGid: z.string().min(1).optional(),
       query: z.string().min(1).optional()
     })
     .strict(),
 
   asana_list_teams: z
     .object({
-      workspaceGid: z.string().min(1),
+      workspaceGid: z.string().min(1).optional(),
       query: z.string().min(1).optional()
     })
     .strict(),
 
   asana_list_users: z
     .object({
-      workspaceGid: z.string().min(1),
+      workspaceGid: z.string().min(1).optional(),
       query: z.string().min(1).optional()
     })
     .strict(),
@@ -191,7 +206,6 @@ export const toolInputSchemas = {
   asana_list_my_tasks: z
     .object({
       workspaceGid: z.string().min(1).optional(),
-      projectGid: z.string().min(1).optional(),
       completed: z.boolean().optional(),
       dueOn: isoDateOnly.optional(),
       dueBefore: isoDateOrDateTime.optional(),
@@ -203,7 +217,9 @@ export const toolInputSchemas = {
 
   asana_list_project_tasks: z
     .object({
-      projectGid: z.string().min(1),
+      workspaceGid: z.string().min(1).optional(),
+      projectGid: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
       completed: z.boolean().optional(),
       dueOn: isoDateOnly.optional(),
       dueBefore: isoDateOrDateTime.optional(),
@@ -211,13 +227,17 @@ export const toolInputSchemas = {
       sortBy: asanaSortBy.optional(),
       sortDirection: sortDirection.optional()
     })
-    .strict(),
+    .strict()
+    .superRefine((input, ctx) =>
+      requireExactlyOne(input as Record<string, unknown>, ctx, ["projectGid", "projectName"])
+    ),
 
   asana_search_tasks: z
     .object({
       workspaceGid: z.string().min(1).optional(),
       text: z.string().min(1),
       projectGid: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
       assigneeGid: z.string().min(1).optional(),
       completed: z.boolean().optional(),
       limit: z.number().int().positive().max(100).optional()
@@ -238,13 +258,16 @@ export const toolInputSchemas = {
       dueOn: isoDateOnly.optional(),
       dueAt: isoDate.optional(),
       assigneeGid: z.string().min(1).optional(),
-      projectGids: z.array(z.string().min(1)).max(20).optional()
+      projectGids: z.array(z.string().min(1)).max(20).optional(),
+      projectNames: z.array(z.string().min(1)).max(20).optional()
     })
     .strict(),
 
   asana_update_task: z
     .object({
-      taskGid: z.string().min(1),
+      workspaceGid: z.string().min(1).optional(),
+      taskGid: z.string().min(1).optional(),
+      taskName: z.string().min(1).optional(),
       name: z.string().min(1).optional(),
       notes: z.string().min(1).optional(),
       dueOn: isoDateOnly.nullable().optional(),
@@ -252,11 +275,26 @@ export const toolInputSchemas = {
       assigneeGid: z.string().min(1).nullable().optional(),
       completed: z.boolean().optional()
     })
-    .strict(),
+    .strict()
+    .superRefine((input, ctx) =>
+      requireExactlyOne(input as Record<string, unknown>, ctx, ["taskGid", "taskName"])
+    ),
 
   asana_delete_task: z
     .object({
-      taskGid: z.string().min(1)
+      workspaceGid: z.string().min(1).optional(),
+      taskGid: z.string().min(1).optional(),
+      taskName: z.string().min(1).optional()
+    })
+    .strict()
+    .superRefine((input, ctx) =>
+      requireExactlyOne(input as Record<string, unknown>, ctx, ["taskGid", "taskName"])
+    ),
+
+  asana_bulk_update_tasks: z
+    .object({
+      taskGids: z.array(z.string().min(1)).min(1).max(25),
+      completed: z.literal(true)
     })
     .strict(),
 
@@ -354,8 +392,7 @@ export const toolDescriptions: Record<ToolName, string> = {
   calendar_delete_event: "Delete a Google Calendar event from a specified calendar.",
   drive_search_files: "Search Google Drive files by text query and optional filters.",
   drive_read_file_metadata: "Read metadata for a Google Drive file.",
-  drive_delete_file:
-    "Move a Google Drive file, including a Google Doc, to trash by file ID.",
+  drive_delete_file: "Move a Google Drive file, including a Google Doc, to trash by file ID.",
   web_search:
     "Search the public web for current factual information and return a concise summary with source URLs.",
   docs_read_document: "Read the contents of a Google Doc by document ID.",
@@ -365,28 +402,29 @@ export const toolDescriptions: Record<ToolName, string> = {
     "Create a new Google Doc with the supplied title and content. Use only when the user explicitly wants a new document.",
   asana_list_workspaces: "List the Asana workspaces visible to the connected user.",
   asana_list_projects:
-    "List Asana projects in a workspace, including team projects when available. Use this to resolve a project before reading or writing tasks.",
+    "List Asana projects in a workspace, including team projects when available. If workspaceGid is omitted, the backend resolves the remembered or only workspace.",
   asana_list_teams:
-    "List Asana teams in a workspace. Use this when the user refers to a team or when project discovery needs more workspace context.",
+    "List Asana teams in a workspace. If workspaceGid is omitted, the backend resolves the remembered or only workspace.",
   asana_list_users:
-    "List Asana users in a workspace. Use this to resolve an assignee before creating or reassigning tasks.",
+    "List Asana users in a workspace. If workspaceGid is omitted, the backend resolves the remembered or only workspace.",
   asana_list_my_tasks:
-    "List tasks from Asana My Tasks. Prefer this for personal task browsing, due today, due soon, or follow-up requests about the user's own work.",
+    "List Asana My Tasks. Always use this for personal task browsing, due today, due soon, digest, and automation task reads.",
   asana_list_project_tasks:
-    "List tasks from a specific Asana project. Prefer this for project browsing instead of Asana search.",
+    "List tasks in a named or ID-based Asana project. Provide exactly one of projectGid or projectName; names auto-resolve only when unique.",
   asana_search_tasks:
-    "Search Asana tasks in a workspace by literal text and optional filters. Use this only for explicit keyword search requests.",
+    "Search Asana tasks in a workspace by literal text and optional projectGid/projectName filters. Project names auto-resolve only when unique.",
   asana_get_task: "Read a single Asana task by task GID.",
   asana_create_task:
-    "Create a new Asana task. Provide only one of dueOn or dueAt. If the user wants no due date, omit both.",
+    "Create a new Asana task. Use projectNames when the user names projects and no stored project GID exists. Provide only one of dueOn or dueAt.",
   asana_update_task:
-    "Update an existing Asana task. Use this to rename, reassign, change dates, or mark a task complete or incomplete. Provide only one of dueOn or dueAt. To remove the due date, clear the existing due field instead of setting both.",
+    "Update an existing Asana task. Provide exactly one of taskGid or taskName; task names auto-resolve only when unique. Provide only one of dueOn or dueAt.",
   asana_delete_task:
-    "Delete an existing Asana task by task GID. Use this only when the user clearly asks to delete or remove the task.",
+    "Delete an existing Asana task. Provide exactly one of taskGid or taskName; task names auto-resolve only when unique.",
+  asana_bulk_update_tasks:
+    "Mark up to 25 explicitly listed Asana tasks complete. Bulk completion always requires user confirmation before execution.",
   notion_search_pages:
     "Search Notion pages by optional text query. Omit query to list accessible pages when the user asks what is in Notion or wants a broad Notion check.",
-  notion_read_page:
-    "Read a Notion page by page ID, including bounded text from its child blocks.",
+  notion_read_page: "Read a Notion page by page ID, including bounded text from its child blocks.",
   notion_create_page:
     "Create a Notion page, optionally with content. Omit parentPageId for workspace-level pages; include parentPageId only when the user selected a specific parent page.",
   notion_append_page:
@@ -439,6 +477,7 @@ export const writeToolNames = [
   "asana_create_task",
   "asana_update_task",
   "asana_delete_task",
+  "asana_bulk_update_tasks",
   "notion_create_page",
   "notion_append_page",
   "notion_update_page_title",

@@ -2,9 +2,9 @@ import { ExternalApiError, UserFacingError } from "../../lib/errors";
 import type {
   AsanaDeletedTaskResult,
   AsanaProjectSummary,
+  AsanaTeamSummary,
   AsanaTaskDetail,
   AsanaTaskSummary,
-  AsanaTeamSummary,
   AsanaUserSummary,
   AsanaWorkspaceSummary
 } from "./asanaTypes";
@@ -114,8 +114,9 @@ function matchesNameQuery(name: string, query?: string): boolean {
 function dueTimestamp(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">): number {
   const value = task.dueAt ?? task.dueOn;
   if (!value) return Number.MAX_SAFE_INTEGER;
-  const timestamp =
-    /^\d{4}-\d{2}-\d{2}$/.test(value) ? Date.parse(`${value}T23:59:59.999Z`) : Date.parse(value);
+  const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? Date.parse(`${value}T23:59:59.999Z`)
+    : Date.parse(value);
   return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
 }
 
@@ -133,10 +134,9 @@ function timeValue(value?: string): number {
 
 function beforeDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueBefore?: string): boolean {
   if (!dueBefore) return true;
-  const filterTimestamp =
-    /^\d{4}-\d{2}-\d{2}$/.test(dueBefore)
-      ? Date.parse(`${dueBefore}T23:59:59.999Z`)
-      : Date.parse(dueBefore);
+  const filterTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(dueBefore)
+    ? Date.parse(`${dueBefore}T23:59:59.999Z`)
+    : Date.parse(dueBefore);
   if (Number.isNaN(filterTimestamp)) return true;
   return dueTimestamp(task) <= filterTimestamp;
 }
@@ -343,33 +343,47 @@ export class AsanaService {
         );
       }
 
-      const data = await this.requestCollection<any>(`/user_task_lists/${userTaskList.gid}/tasks`, {
-        query: {
-          limit: String(pageSize),
-          opt_fields: TASK_FIELDS,
-          completed_since: completedSince
+      const data = await this.requestCollection<any>(
+        `/user_task_lists/${userTaskList.gid}/tasks`,
+        {
+          query: {
+            limit: String(pageSize),
+            opt_fields: TASK_FIELDS,
+            completed_since: completedSince
+          }
+        },
+        {
+          maxItems: fetchLimit
         }
-      }, {
-        maxItems: fetchLimit
-      });
+      );
 
-      return filterTasks(data.map(normalizeTask).filter((task) => task.gid), input);
+      return filterTasks(
+        data.map(normalizeTask).filter((task) => task.gid),
+        input
+      );
     } catch (error) {
       if (!this.shouldFallbackToWorkspaceTaskList(error)) throw error;
 
-      const fallbackData = await this.requestCollection<any>("/tasks", {
-        query: {
-          assignee: "me",
-          workspace: input.workspaceGid,
-          limit: String(pageSize),
-          completed_since: completedSince,
-          opt_fields: TASK_FIELDS
+      const fallbackData = await this.requestCollection<any>(
+        "/tasks",
+        {
+          query: {
+            assignee: "me",
+            workspace: input.workspaceGid,
+            limit: String(pageSize),
+            completed_since: completedSince,
+            opt_fields: TASK_FIELDS
+          }
+        },
+        {
+          maxItems: fetchLimit
         }
-      }, {
-        maxItems: fetchLimit
-      });
+      );
 
-      return filterTasks(fallbackData.map(normalizeTask).filter((task) => task.gid), input);
+      return filterTasks(
+        fallbackData.map(normalizeTask).filter((task) => task.gid),
+        input
+      );
     }
   }
 
@@ -384,17 +398,24 @@ export class AsanaService {
   }): Promise<AsanaTaskSummary[]> {
     const fetchLimit = Math.min(Math.max((input.limit ?? 20) * 5, 50), MAX_COLLECTION_ITEMS);
     const pageSize = Math.min(fetchLimit, 100);
-    const data = await this.requestCollection<any>(`/projects/${input.projectGid}/tasks`, {
-      query: {
-        limit: String(pageSize),
-        opt_fields: TASK_FIELDS,
-        completed_since: completedSinceForSelection(input.completed)
+    const data = await this.requestCollection<any>(
+      `/projects/${input.projectGid}/tasks`,
+      {
+        query: {
+          limit: String(pageSize),
+          opt_fields: TASK_FIELDS,
+          completed_since: completedSinceForSelection(input.completed)
+        }
+      },
+      {
+        maxItems: fetchLimit
       }
-    }, {
-      maxItems: fetchLimit
-    });
+    );
 
-    return filterTasks(data.map(normalizeTask).filter((task) => task.gid), input);
+    return filterTasks(
+      data.map(normalizeTask).filter((task) => task.gid),
+      input
+    );
   }
 
   async searchTasks(input: {
@@ -406,19 +427,23 @@ export class AsanaService {
     limit?: number;
   }): Promise<AsanaTaskSummary[]> {
     const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
-    const data = await this.requestCollection<any>(`/workspaces/${input.workspaceGid}/tasks/search`, {
-      query: {
-        text: input.text,
-        "projects.any": input.projectGid,
-        "assignee.any": input.assigneeGid,
-        completed: input.completed === undefined ? undefined : String(input.completed),
-        limit: String(limit),
-        sort_by: "modified_at",
-        opt_fields: TASK_FIELDS
+    const data = await this.requestCollection<any>(
+      `/workspaces/${input.workspaceGid}/tasks/search`,
+      {
+        query: {
+          text: input.text,
+          "projects.any": input.projectGid,
+          "assignee.any": input.assigneeGid,
+          completed: input.completed === undefined ? undefined : String(input.completed),
+          limit: String(limit),
+          sort_by: "modified_at",
+          opt_fields: TASK_FIELDS
+        }
+      },
+      {
+        maxItems: limit
       }
-    }, {
-      maxItems: limit
-    });
+    );
 
     return data.map(normalizeTask).filter((task) => task.gid);
   }

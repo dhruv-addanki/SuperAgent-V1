@@ -9,7 +9,7 @@ import { env } from "../../config/env";
 import { AuditService } from "../audit/auditService";
 import { AsanaService } from "../asana/asanaService";
 import { AsanaTokenService } from "../asana/tokenService";
-import type { AsanaTaskSummary, AsanaTeamSummary } from "../asana/asanaTypes";
+import type { AsanaProjectSummary, AsanaTaskSummary, AsanaTeamSummary } from "../asana/asanaTypes";
 import { CalendarService } from "../google/calendarService";
 import { DocsService } from "../google/docsService";
 import { DriveService } from "../google/driveService";
@@ -500,20 +500,18 @@ export class ToolExecutor {
 
   private async rememberRecentAsanaProjects(
     userId: string,
-    projects: Array<{
-      gid: string;
-      name?: string;
-      workspaceGid?: string;
-      workspaceName?: string;
-      teamGid?: string;
-      teamName?: string;
-    }>
+    projects: Array<
+      AsanaProjectSummary & {
+        teamGid?: string;
+        teamName?: string;
+      }
+    >
   ): Promise<void> {
     const normalizedProjects = Array.from(
       new Map(
         projects
           .filter((project) => project.gid)
-          .slice(0, 20)
+          .slice(0, 25)
           .map((project) => [
             project.gid,
             {
@@ -522,7 +520,8 @@ export class ToolExecutor {
               workspaceGid: project.workspaceGid,
               workspaceName: project.workspaceName,
               teamGid: project.teamGid,
-              teamName: project.teamName
+              teamName: project.teamName,
+              archived: project.archived
             }
           ])
       ).values()
@@ -636,6 +635,212 @@ export class ToolExecutor {
       "Asana workspace selection required",
       "ASANA_WORKSPACE_SELECTION_REQUIRED",
       "You have multiple Asana workspaces. Ask me to list Asana workspaces and pick one."
+    );
+  }
+
+  private normalizeAsanaName(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  private looksLikeAsanaGid(value: string): boolean {
+    return /^(?:\d{6,}|[a-z]+_\d+)$/i.test(value.trim());
+  }
+
+  private formatAsanaCandidates<T extends { gid: string; name: string }>(
+    candidates: T[],
+    idLabel: string
+  ): string {
+    return candidates
+      .slice(0, 5)
+      .map((candidate) => `- ${candidate.name} (${idLabel}: ${candidate.gid})`)
+      .join("\n");
+  }
+
+  private pickUniqueByName<T extends { name: string }>(
+    items: T[],
+    requestedName: string
+  ): T | null {
+    const normalized = this.normalizeAsanaName(requestedName);
+    const exactMatches = items.filter((item) => this.normalizeAsanaName(item.name) === normalized);
+    if (exactMatches.length === 1) return exactMatches[0]!;
+    if (exactMatches.length > 1) return null;
+
+    const fuzzyMatches = items.filter((item) => {
+      const name = this.normalizeAsanaName(item.name);
+      return name.includes(normalized) || normalized.includes(name);
+    });
+
+    return fuzzyMatches.length === 1 ? fuzzyMatches[0]! : null;
+  }
+
+  private async resolveAsanaProjectGid(
+    userId: string,
+    service: AsanaService,
+    input: { workspaceGid?: string; projectGid?: string; projectName?: string }
+  ): Promise<string> {
+    if (input.projectGid && this.looksLikeAsanaGid(input.projectGid)) {
+      return input.projectGid;
+    }
+
+    const projectName = input.projectName ?? input.projectGid;
+    if (!projectName) {
+      throw new UserFacingError(
+        "Asana project selection required",
+        "ASANA_PROJECT_SELECTION_REQUIRED",
+        "Tell me which Asana project to use."
+      );
+    }
+
+    const workspaceGid = await this.resolveAsanaWorkspace(userId, service, input.workspaceGid);
+    const projects = await service.listProjects(workspaceGid);
+    await this.rememberRecentAsanaWorkspace(userId, { workspaceGid });
+    await this.rememberRecentAsanaProjects(userId, projects);
+
+    const normalizedProjectName = this.normalizeAsanaName(projectName);
+    const exactMatches = projects.filter(
+      (project) => this.normalizeAsanaName(project.name) === normalizedProjectName
+    );
+    if (exactMatches.length === 1) return exactMatches[0]!.gid;
+
+    if (exactMatches.length > 1) {
+      throw new UserFacingError(
+        "Ambiguous Asana project",
+        "ASANA_PROJECT_AMBIGUOUS",
+        [
+          `I found multiple Asana projects named "${projectName}".`,
+          this.formatAsanaCandidates(exactMatches, "projectGid"),
+          "Tell me which one to use."
+        ].join("\n")
+      );
+    }
+
+    const fuzzyMatches = projects.filter((project) => {
+      const name = this.normalizeAsanaName(project.name);
+      return name.includes(normalizedProjectName) || normalizedProjectName.includes(name);
+    });
+    if (fuzzyMatches.length === 1) return fuzzyMatches[0]!.gid;
+
+    if (fuzzyMatches.length > 1) {
+      throw new UserFacingError(
+        "Ambiguous Asana project",
+        "ASANA_PROJECT_AMBIGUOUS",
+        [
+          `I found multiple Asana projects matching "${projectName}".`,
+          this.formatAsanaCandidates(fuzzyMatches, "projectGid"),
+          "Tell me which one to use."
+        ].join("\n")
+      );
+    }
+
+    throw new UserFacingError(
+      "Asana project not found",
+      "ASANA_PROJECT_NOT_FOUND",
+      `I couldn't find an Asana project named "${projectName}". Ask me to list Asana projects if you want to pick from them.`
+    );
+  }
+
+  private async resolveAsanaProjectGids(
+    userId: string,
+    service: AsanaService,
+    input: { workspaceGid?: string; projectGids?: string[]; projectNames?: string[] }
+  ): Promise<string[] | undefined> {
+    const projectInputs = [
+      ...(input.projectGids ?? []).map((projectGid) => ({ projectGid })),
+      ...(input.projectNames ?? []).map((projectName) => ({ projectName }))
+    ];
+    if (!projectInputs.length) return undefined;
+
+    const resolved = await Promise.all(
+      projectInputs.map((projectInput) =>
+        this.resolveAsanaProjectGid(userId, service, {
+          workspaceGid: input.workspaceGid,
+          ...projectInput
+        })
+      )
+    );
+
+    return [...new Set(resolved)];
+  }
+
+  private async getRecentAsanaTasks(userId: string): Promise<AsanaTaskSummary[]> {
+    const entry = await this.prisma.memoryEntry.findUnique({
+      where: { userId_key: { userId, key: "recent_asana_tasks" } }
+    });
+
+    if (!Array.isArray(entry?.value)) return [];
+    return entry.value
+      .map((task) => {
+        const value = task as { taskGid?: unknown; gid?: unknown; name?: unknown };
+        const gid = typeof value.taskGid === "string" ? value.taskGid : value.gid;
+        return typeof gid === "string" && typeof value.name === "string"
+          ? ({
+              ...value,
+              gid,
+              name: value.name
+            } as AsanaTaskSummary)
+          : null;
+      })
+      .filter((task): task is AsanaTaskSummary => Boolean(task));
+  }
+
+  private async resolveAsanaTaskGid(
+    userId: string,
+    service: AsanaService,
+    input: { workspaceGid?: string; taskGid?: string; taskName?: string }
+  ): Promise<string> {
+    if (input.taskGid && this.looksLikeAsanaGid(input.taskGid)) {
+      return input.taskGid;
+    }
+
+    const taskName = input.taskName ?? input.taskGid;
+    if (!taskName) {
+      throw new UserFacingError(
+        "Asana task selection required",
+        "ASANA_TASK_SELECTION_REQUIRED",
+        "Tell me which Asana task to use."
+      );
+    }
+
+    const recentTasks = await this.getRecentAsanaTasks(userId);
+    const recentMatch = this.pickUniqueByName(recentTasks, taskName);
+    if (recentMatch) return recentMatch.gid;
+
+    const workspaceGid = await this.resolveAsanaWorkspace(userId, service, input.workspaceGid);
+    const searchResults = await service.searchTasks({
+      workspaceGid,
+      text: taskName,
+      limit: 10
+    });
+    await this.rememberRecentAsanaWorkspace(userId, { workspaceGid });
+    if (searchResults.length) {
+      await this.rememberRecentAsanaTasks(userId, searchResults);
+    }
+
+    const searchMatch = this.pickUniqueByName(searchResults, taskName);
+    if (searchMatch) return searchMatch.gid;
+
+    const normalizedTaskName = this.normalizeAsanaName(taskName);
+    const candidates = searchResults.filter((task) => {
+      const name = this.normalizeAsanaName(task.name);
+      return name.includes(normalizedTaskName) || normalizedTaskName.includes(name);
+    });
+
+    if (candidates.length > 1) {
+      throw new UserFacingError(
+        "Ambiguous Asana task",
+        "ASANA_TASK_AMBIGUOUS",
+        [
+          `I found multiple Asana tasks matching "${taskName}".`,
+          this.formatAsanaCandidates(candidates, "taskGid"),
+          "Tell me which one to use."
+        ].join("\n")
+      );
+    }
+
+    throw new UserFacingError(
+      "Asana task not found",
+      "ASANA_TASK_NOT_FOUND",
+      `I couldn't find an Asana task named "${taskName}". Ask me to list recent Asana tasks if you want to pick from them.`
     );
   }
 
@@ -948,19 +1153,20 @@ export class ToolExecutor {
                   ? ["teams:read", "workspaces:read"]
                   : toolName === "asana_list_users"
                     ? ["users:read", "workspaces:read"]
-                    : toolName === "asana_list_project_tasks"
-                      ? ["tasks:read", "projects:read"]
+                    : toolName === "asana_list_project_tasks" || toolName === "asana_search_tasks"
+                      ? ["tasks:read", "projects:read", "workspaces:read"]
                       : toolName === "asana_delete_task"
-                        ? ["tasks:delete", "tasks:read"]
-                        : toolName === "asana_create_task"
-                          ? ["tasks:write"]
-                          : toolName === "asana_update_task"
-                            ? ["tasks:write", "tasks:read"]
-                            : ["tasks:read"],
+                        ? ["tasks:delete", "tasks:read", "workspaces:read"]
+                        : toolName === "asana_bulk_update_tasks"
+                          ? ["tasks:write", "tasks:read"]
+                          : toolName === "asana_create_task" || toolName === "asana_update_task"
+                            ? ["tasks:write", "tasks:read", "projects:read", "workspaces:read"]
+                            : ["tasks:read", "workspaces:read"],
           reconnectReason:
             toolName === "asana_create_task" ||
             toolName === "asana_update_task" ||
-            toolName === "asana_delete_task"
+            toolName === "asana_delete_task" ||
+            toolName === "asana_bulk_update_tasks"
               ? "Reconnect your Asana account to manage tasks"
               : "Reconnect your Asana account to read tasks"
         });
@@ -980,10 +1186,15 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_list_projects") {
+          const workspaceGid = await this.resolveAsanaWorkspace(
+            context.user.id,
+            service,
+            input.workspaceGid
+          );
           await this.rememberRecentAsanaWorkspace(context.user.id, {
-            workspaceGid: input.workspaceGid
+            workspaceGid
           });
-          const data = await service.listProjects(input.workspaceGid, input.query);
+          const data = await service.listProjects(workspaceGid, input.query);
           await this.rememberRecentAsanaProjects(context.user.id, data);
           await this.rememberRecentAsanaTeams(
             context.user.id,
@@ -1007,53 +1218,42 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_list_teams") {
+          const workspaceGid = await this.resolveAsanaWorkspace(
+            context.user.id,
+            service,
+            input.workspaceGid
+          );
           await this.rememberRecentAsanaWorkspace(context.user.id, {
-            workspaceGid: input.workspaceGid
+            workspaceGid
           });
-          const data = await service.listTeams(input.workspaceGid, input.query);
+          const data = await service.listTeams(workspaceGid, input.query);
           await this.rememberRecentAsanaTeams(context.user.id, data);
           return { ok: true, data };
         }
 
         if (toolName === "asana_list_users") {
+          const workspaceGid = await this.resolveAsanaWorkspace(
+            context.user.id,
+            service,
+            input.workspaceGid
+          );
           await this.rememberRecentAsanaWorkspace(context.user.id, {
-            workspaceGid: input.workspaceGid
+            workspaceGid
           });
-          const data = await service.listUsers(input.workspaceGid, input.query);
+          const data = await service.listUsers(workspaceGid, input.query);
           return { ok: true, data };
         }
 
         if (toolName === "asana_list_my_tasks") {
-          if (input.projectGid && !looksLikeAsanaGid(input.projectGid)) {
-            return {
-              ok: false,
-              error: "ASANA_PROJECT_NOT_RESOLVED",
-              userMessage:
-                "I couldn't identify that Asana project. Use My Tasks for personal planning, or list projects first to pick a project."
-            };
-          }
-          const workspaceGid = input.projectGid
-            ? undefined
-            : await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid);
-          const data = input.projectGid
-            ? await service.listProjectTasks({
-                projectGid: input.projectGid,
-                completed: input.completed,
-                dueOn: input.dueOn,
-                dueBefore: input.dueBefore,
-                limit: input.limit,
-                sortBy: input.sortBy,
-                sortDirection: input.sortDirection
-              })
-            : await service.listMyTasks({
-                workspaceGid: workspaceGid!,
-                completed: input.completed,
-                dueOn: input.dueOn,
-                dueBefore: input.dueBefore,
-                limit: input.limit,
-                sortBy: input.sortBy,
-                sortDirection: input.sortDirection
-              });
+          const workspaceGid = await this.resolveAsanaWorkspace(
+            context.user.id,
+            service,
+            input.workspaceGid
+          );
+          const data = await service.listMyTasks({
+            ...input,
+            workspaceGid
+          });
           if (workspaceGid) {
             await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });
           }
@@ -1072,15 +1272,20 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_list_project_tasks") {
-          if (!looksLikeAsanaGid(input.projectGid)) {
-            return {
-              ok: false,
-              error: "ASANA_PROJECT_NOT_RESOLVED",
-              userMessage:
-                "I couldn't identify that Asana project. Use My Tasks for personal planning, or list projects first to pick a project."
-            };
-          }
-          const data = await service.listProjectTasks(input);
+          const projectGid = await this.resolveAsanaProjectGid(context.user.id, service, {
+            workspaceGid: input.workspaceGid,
+            projectGid: input.projectGid,
+            projectName: input.projectName
+          });
+          const data = await service.listProjectTasks({
+            projectGid,
+            completed: input.completed,
+            dueOn: input.dueOn,
+            dueBefore: input.dueBefore,
+            limit: input.limit,
+            sortBy: input.sortBy,
+            sortDirection: input.sortDirection
+          });
           if (data.length) {
             const firstTask = data[0];
             await this.rememberRecentAsanaTasks(context.user.id, data);
@@ -1101,9 +1306,18 @@ export class ToolExecutor {
             service,
             input.workspaceGid
           );
+          const projectGid =
+            input.projectName || input.projectGid
+              ? await this.resolveAsanaProjectGid(context.user.id, service, {
+                  workspaceGid,
+                  projectGid: input.projectGid,
+                  projectName: input.projectName
+                })
+              : undefined;
           const data = await service.searchTasks({
             ...input,
-            workspaceGid
+            workspaceGid,
+            projectGid
           });
           await this.rememberRecentAsanaWorkspace(context.user.id, { workspaceGid });
           if (data.length) {
@@ -1127,13 +1341,19 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_create_task") {
+          const projectGids = await this.resolveAsanaProjectGids(context.user.id, service, {
+            workspaceGid: input.workspaceGid,
+            projectGids: input.projectGids,
+            projectNames: input.projectNames
+          });
           const workspaceGid =
-            input.workspaceGid || !input.projectGids?.length
+            input.workspaceGid || !projectGids?.length
               ? await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid)
               : undefined;
           const data = await service.createTask({
             ...input,
-            workspaceGid
+            workspaceGid,
+            projectGids
           });
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
           await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
@@ -1156,7 +1376,20 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_update_task") {
-          const data = await service.updateTask(input);
+          const taskGid = await this.resolveAsanaTaskGid(context.user.id, service, {
+            workspaceGid: input.workspaceGid,
+            taskGid: input.taskGid,
+            taskName: input.taskName
+          });
+          const data = await service.updateTask({
+            taskGid,
+            name: input.name,
+            notes: input.notes,
+            dueOn: input.dueOn,
+            dueAt: input.dueAt,
+            assigneeGid: input.assigneeGid,
+            completed: input.completed
+          });
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
           await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           if (data.workspaceGid) {
@@ -1177,7 +1410,12 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_delete_task") {
-          const data = await service.deleteTask(input.taskGid);
+          const taskGid = await this.resolveAsanaTaskGid(context.user.id, service, {
+            workspaceGid: input.workspaceGid,
+            taskGid: input.taskGid,
+            taskName: input.taskName
+          });
+          const data = await service.deleteTask(taskGid);
           await this.audit.log({
             userId: context.user.id,
             actionType: "asana_delete_task",
@@ -1187,6 +1425,45 @@ export class ToolExecutor {
             status: "executed"
           });
           return { ok: true, data, userMessage: data.summary };
+        }
+
+        if (toolName === "asana_bulk_update_tasks") {
+          const updated: AsanaTaskSummary[] = [];
+          const failed: Array<{ taskGid: string; error: string }> = [];
+
+          for (const taskGid of input.taskGids) {
+            try {
+              const task = await service.updateTask({ taskGid, completed: true });
+              updated.push(task);
+            } catch (error) {
+              failed.push({ taskGid, error: serializeError(error) });
+            }
+          }
+
+          if (updated.length) {
+            await this.rememberRecentAsanaTasks(context.user.id, updated);
+          }
+
+          const data = {
+            updated,
+            failed,
+            summary: `Completed ${updated.length} Asana task${updated.length === 1 ? "" : "s"}${failed.length ? `; ${failed.length} failed` : ""}.`
+          };
+
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "asana_bulk_update_tasks",
+            toolName,
+            requestPayload: input,
+            responsePayload: data,
+            status: failed.length ? "failed" : "executed"
+          });
+
+          return {
+            ok: failed.length === 0,
+            data,
+            userMessage: data.summary
+          };
         }
       }
 
@@ -1455,11 +1732,6 @@ export class ToolExecutor {
       };
     }
   }
-}
-
-function looksLikeAsanaGid(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  return /^\d{3,}$/.test(value) || /^project_\d+$/.test(value);
 }
 
 function defaultToolFailureMessage(toolName: ToolName): string {

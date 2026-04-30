@@ -32,7 +32,18 @@ export function parseConfirmationIntent(text: string): ConfirmationIntent | null
     return "SEND";
   }
   if (
-    ["confirm", "book it", "create it", "go ahead", "do it", "do that", "ok", "okay", "yes", "sure"].includes(normalized) ||
+    [
+      "confirm",
+      "book it",
+      "create it",
+      "go ahead",
+      "do it",
+      "do that",
+      "ok",
+      "okay",
+      "yes",
+      "sure"
+    ].includes(normalized) ||
     /^yes\b.*\b(confirm|book it|create it)\b/.test(normalized)
   ) {
     return "CONFIRM";
@@ -64,7 +75,7 @@ export function userClearlyRequestedCalendarWrite(text: string): boolean {
 
 export function getApprovalDecision(
   toolName: ToolName,
-  _input: unknown,
+  input: unknown,
   _latestUserMessage: string
 ): ApprovalDecision {
   if (toolName === "gmail_send_draft") {
@@ -77,21 +88,28 @@ export function getApprovalDecision(
   }
 
   if (toolName === "automation_create") {
-    const input = _input as {
+    const automationInput = input as {
       name?: string;
       prompt?: string;
       schedule?: unknown;
       timezone?: string;
     };
     const timezone =
-      input.timezone && isValidTimezone(input.timezone) ? input.timezone : "the user's timezone";
-    let confirmationMessage = "Create this scheduled automation? Reply yes to create it, or cancel.";
+      automationInput.timezone && isValidTimezone(automationInput.timezone)
+        ? automationInput.timezone
+        : "the user's timezone";
+    let confirmationMessage =
+      "Create this scheduled automation? Reply yes to create it, or cancel.";
     try {
-      if (input.prompt && typeof timezone === "string" && timezone !== "the user's timezone") {
+      if (
+        automationInput.prompt &&
+        typeof timezone === "string" &&
+        timezone !== "the user's timezone"
+      ) {
         confirmationMessage = formatAutomationConfirmation({
-          name: input.name,
-          prompt: input.prompt,
-          schedule: normalizeAutomationSchedule(input.schedule),
+          name: automationInput.name,
+          prompt: automationInput.prompt,
+          schedule: normalizeAutomationSchedule(automationInput.schedule),
           timezone
         });
       }
@@ -114,6 +132,31 @@ export function getApprovalDecision(
 
   if (toolName === "calendar_delete_event") {
     return { requiresApproval: false };
+  }
+
+  if (toolName === "asana_bulk_update_tasks") {
+    const taskGids =
+      input &&
+      typeof input === "object" &&
+      Array.isArray((input as { taskGids?: unknown }).taskGids)
+        ? ((input as { taskGids: unknown[] }).taskGids.filter(
+            (taskGid): taskGid is string => typeof taskGid === "string"
+          ) as string[])
+        : [];
+
+    return {
+      requiresApproval: true,
+      confirmationKeyword: "CONFIRM",
+      confirmationMessage: [
+        `Complete ${taskGids.length} Asana task${taskGids.length === 1 ? "" : "s"}?`,
+        ...taskGids.slice(0, 10).map((taskGid) => `- ${taskGid}`),
+        taskGids.length > 10 ? `...and ${taskGids.length - 10} more` : undefined,
+        "Reply yes to confirm, or cancel."
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      reason: "asana_bulk_completion"
+    };
   }
 
   return { requiresApproval: false };
@@ -180,7 +223,11 @@ export function matchesPositiveConfirmation(
   intent: Exclude<ConfirmationIntent, "CANCEL">,
   expected: Exclude<ConfirmationIntent, "CANCEL">
 ): boolean {
-  return intent === expected || (intent === "SEND" && expected === "CONFIRM") || (intent === "CONFIRM" && expected === "SEND");
+  return (
+    intent === expected ||
+    (intent === "SEND" && expected === "CONFIRM") ||
+    (intent === "CONFIRM" && expected === "SEND")
+  );
 }
 
 export function buildPendingActionContext(pendingAction: PendingAction | null): string {
@@ -190,11 +237,14 @@ export function buildPendingActionContext(pendingAction: PendingAction | null): 
   if (!payload?.toolName) return "A pending action exists, but its details are unavailable.";
 
   if (payload.toolName === "gmail_send_draft") {
-    const subject = typeof payload.context?.subject === "string" ? payload.context.subject : undefined;
+    const subject =
+      typeof payload.context?.subject === "string" ? payload.context.subject : undefined;
     const to = typeof payload.context?.to === "string" ? payload.context.to : undefined;
     const body = typeof payload.context?.body === "string" ? payload.context.body : undefined;
     const draftId =
-      payload.input && typeof payload.input === "object" && typeof (payload.input as { draftId?: unknown }).draftId === "string"
+      payload.input &&
+      typeof payload.input === "object" &&
+      typeof (payload.input as { draftId?: unknown }).draftId === "string"
         ? (payload.input as { draftId: string }).draftId
         : undefined;
 
