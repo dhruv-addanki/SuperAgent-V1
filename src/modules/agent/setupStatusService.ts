@@ -69,12 +69,18 @@ export function isSetupStatusRequest(text: string): boolean {
   const normalized = normalizeMessage(text);
   return (
     /^(setup|set up|connect|connections|integrations|status)$/.test(normalized) ||
-    /^(?:show|check|view) (?:my )?(?:setup|connections|integrations|connected accounts|account status)$/.test(normalized) ||
+    /^(?:show|check|view) (?:my )?(?:setup|connections|integrations|connected accounts|account status)$/.test(
+      normalized
+    ) ||
     /^what(?:'s| is) connected$/.test(normalized) ||
     /^which (?:accounts|integrations) (?:are )?connected$/.test(normalized) ||
     /^help (?:me )?(?:setting|set) up$/.test(normalized) ||
-    /^(?:connect|reconnect) (?:my )?(?:accounts|integrations|google|asana|notion)$/.test(normalized) ||
-    /^(?:connect|reconnect) (?:my )?.*\b(?:google|asana|notion|accounts|integrations)\b/.test(normalized)
+    /^(?:connect|reconnect) (?:my )?(?:accounts|integrations|google|asana|notion)$/.test(
+      normalized
+    ) ||
+    /^(?:connect|reconnect) (?:my )?.*\b(?:google|asana|notion|accounts|integrations)\b/.test(
+      normalized
+    )
   );
 }
 
@@ -136,17 +142,24 @@ export function missingIntegrationsForRequest(
   );
 }
 
-export function formatMissingIntegrationForWhatsApp(
-  integration: SetupIntegrationStatus
-): string {
+export function missingIntegrationsForRequired(
+  requiredIntegrations: SetupIntegrationKey[],
+  status: SetupStatus
+): SetupIntegrationStatus[] {
+  const required = new Set(requiredIntegrations);
+  if (!required.size) return [];
+  return status.integrations.filter(
+    (integration) => required.has(integration.key) && !integration.connected
+  );
+}
+
+export function formatMissingIntegrationForWhatsApp(integration: SetupIntegrationStatus): string {
   return integration.connectUrl
     ? `Connect ${integration.label} first: ${integration.connectUrl}`
     : `Connect ${integration.label} first.`;
 }
 
-export function formatIntegrationLinkForWhatsApp(
-  integration: SetupIntegrationStatus
-): string {
+export function formatIntegrationLinkForWhatsApp(integration: SetupIntegrationStatus): string {
   if (!integration.connectUrl) return `I don't have a ${integration.label} link available.`;
 
   if (!integration.connected) {
@@ -194,10 +207,11 @@ export function setupStatusProfileLines(status: SetupStatus, timezone: string): 
     `Missing integrations: ${missing.length ? missing.join(", ") : "None"}`,
     ...status.integrations
       .filter((integration) => integration.connectUrl)
-      .map((integration) =>
-        `${integration.label} ${integration.connected ? "reconnect" : "connect"} link: ${
-          integration.connectUrl
-        }`
+      .map(
+        (integration) =>
+          `${integration.label} ${integration.connected ? "reconnect" : "connect"} link: ${
+            integration.connectUrl
+          }`
       )
   ];
 }

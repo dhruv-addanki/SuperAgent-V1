@@ -1,6 +1,7 @@
 import type { PendingAction } from "@prisma/client";
 import type { PendingToolPayload } from "./approvalPolicy";
 import { detectReferencedApps, type ReferencedApp } from "./compoundIntent";
+import { formatIntentRouteForPrompt, type IntentDomain, type IntentRoute } from "./intentRouter";
 
 export interface PromptMemoryEntry {
   key: string;
@@ -15,6 +16,7 @@ export interface ConversationContext {
   activeEntities: string[];
   recentResults: string[];
   pendingActionSummary: string;
+  routeSummary: string;
   communicationHints: string[];
   userPreferences: string[];
 }
@@ -25,16 +27,25 @@ export function buildConversationContext(input: {
   pendingAction: PendingAction | null;
   pendingActionSummary: string;
   userProfile?: string[];
+  intentRoute?: IntentRoute;
 }): ConversationContext {
-  const messageApps = detectReferencedApps(input.latestUserMessage);
-  const activeApp =
-    messageApps.length > 1
+  const hasIntentRoute = Boolean(input.intentRoute);
+  const messageApps = hasIntentRoute ? [] : detectReferencedApps(input.latestUserMessage);
+  const routeApps = routeReferencedApps(input.intentRoute);
+  const routeActiveApp = activeAppFromRoute(input.intentRoute, routeApps);
+  const fallbackActiveApp = hasIntentRoute
+    ? (inferActiveAppFromPendingAction(input.pendingAction) ??
+      inferActiveAppFromMemory(input.memoryEntries) ??
+      "general")
+    : messageApps.length > 1
       ? "multi"
       : (messageApps[0] ??
         inferActiveAppFromPendingAction(input.pendingAction) ??
         inferActiveAppFromMemory(input.memoryEntries) ??
         "general");
-  const contextApps = activeApp === "multi" ? messageApps : undefined;
+  const activeApp = routeActiveApp ?? fallbackActiveApp;
+  const contextApps =
+    activeApp === "multi" ? (routeApps.length ? routeApps : messageApps) : undefined;
   const includeImageContext =
     activeApp === "image" || referencesImageContext(input.latestUserMessage);
 
@@ -78,7 +89,9 @@ export function buildConversationContext(input: {
     if (entry.key === "calendar_exclusion_preferences") {
       const excludedCalendarNames = calendarExclusionSummary(entry.value);
       if (excludedCalendarNames) {
-        userPreferences.push(`Exclude calendars from generic calendar reads: ${excludedCalendarNames}`);
+        userPreferences.push(
+          `Exclude calendars from generic calendar reads: ${excludedCalendarNames}`
+        );
       }
       continue;
     }
@@ -128,6 +141,9 @@ export function buildConversationContext(input: {
     activeEntities,
     recentResults,
     pendingActionSummary: input.pendingActionSummary,
+    routeSummary: input.intentRoute
+      ? formatIntentRouteForPrompt(input.intentRoute)
+      : "No central intent route was provided.",
     communicationHints: Array.from(communicationHints).slice(0, 6),
     userPreferences: userPreferences.slice(0, 4)
   };
@@ -137,7 +153,9 @@ function calendarExclusionSummary(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
   const excluded = (value as { excludedCalendarNames?: unknown }).excludedCalendarNames;
   if (!Array.isArray(excluded)) return null;
-  const names = excluded.filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  const names = excluded.filter(
+    (item): item is string => typeof item === "string" && Boolean(item.trim())
+  );
   return names.length ? names.join(", ") : null;
 }
 
@@ -156,6 +174,8 @@ export function formatConversationContextForPrompt(context: ConversationContext)
     context.recentResults.length
       ? context.recentResults.map((line) => `- ${line}`).join("\n")
       : "- None",
+    "Routing:",
+    context.routeSummary,
     "Pending action summary:",
     context.pendingActionSummary,
     "Communication hints:",
@@ -167,6 +187,37 @@ export function formatConversationContextForPrompt(context: ConversationContext)
       ? context.userPreferences.map((line) => `- ${line}`).join("\n")
       : "- None"
   ].join("\n");
+}
+
+function routeReferencedApps(route: IntentRoute | undefined): ReferencedApp[] {
+  if (!route) return [];
+  return route.domains.filter(isReferencedApp);
+}
+
+function activeAppFromRoute(
+  route: IntentRoute | undefined,
+  routeApps: ReferencedApp[]
+): string | null {
+  if (!route) return null;
+  if (route.primaryDomain === "multi") return "multi";
+  if (route.primaryDomain !== "general" && route.primaryDomain !== "setup") {
+    return route.primaryDomain;
+  }
+  if (routeApps.length > 1) return "multi";
+  return routeApps[0] ?? null;
+}
+
+function isReferencedApp(domain: IntentDomain): domain is ReferencedApp {
+  return (
+    domain === "asana" ||
+    domain === "automation" ||
+    domain === "calendar" ||
+    domain === "gmail" ||
+    domain === "docs" ||
+    domain === "drive" ||
+    domain === "notion" ||
+    domain === "web"
+  );
 }
 
 function assistantPreferenceSummary(value: unknown): string | null {

@@ -2,6 +2,7 @@ import {
   MessageRole,
   PendingActionStatus,
   type Conversation,
+  type PendingAction,
   type PrismaClient,
   type User
 } from "@prisma/client";
@@ -43,13 +44,12 @@ import {
   formatSetupStatusForWhatsApp,
   integrationLinkRequestForMessage,
   isGreetingOnly,
-  isSetupStatusRequest,
-  missingIntegrationsForRequest,
+  missingIntegrationsForRequired,
   setupStatusProfileLines,
   SetupStatusService,
   type SetupStatus
 } from "./setupStatusService";
-import { isCompoundIntentRequest } from "./compoundIntent";
+import { classifyIntentRoute, summarizeIntentRouteForLog, type IntentRoute } from "./intentRouter";
 import {
   asanaTaskDueDate,
   formatAsanaTaskOverview,
@@ -200,19 +200,53 @@ export class AgentOrchestrator {
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
       const setupStatus = await this.setupStatusService.getStatus(user);
-      const setupRequest = isSetupStatusRequest(preparedInput.text);
-      const integrationLinkRequest = integrationLinkRequestForMessage(
-        preparedInput.text,
-        setupStatus
+      const pendingAction = await resolvePendingActionFromConversation(
+        this.prisma,
+        user.id,
+        conversation.id
       );
+      const pendingActionSummary = buildPendingActionContext(pendingAction);
+      const intentRoute = classifyIntentRoute({
+        text: preparedInput.text,
+        hasModelInput: Boolean(preparedInput.modelInputItem),
+        history,
+        memoryEntries,
+        timezone: user.timezone,
+        hasPendingAction: Boolean(pendingAction),
+        pendingActionSummary
+      });
+      const setupRequest = intentRoute.domains.includes("setup") && intentRoute.action === "setup";
+      const integrationLinkRequest = setupRequest
+        ? integrationLinkRequestForMessage(preparedInput.text, setupStatus)
+        : null;
       const firstInteraction = isFirstInteraction(history);
-      const isCompoundIntent = isCompoundIntentRequest(preparedInput.text);
       const shouldUseTextShortcuts = !preparedInput.modelInputItem;
       const appendSetupHint =
         firstInteraction &&
         !setupRequest &&
         !isGreetingOnly(preparedInput.text) &&
         !setupStatus.hasAnyConnected;
+      const missingRequiredIntegrations = missingIntegrationsForRequired(
+        intentRoute.requiredIntegrations,
+        setupStatus
+      );
+      const chosenHandler = integrationLinkRequest
+        ? "integration_link"
+        : setupRequest
+          ? "setup_status"
+          : missingRequiredIntegrations.length
+            ? "missing_integration_gate"
+            : (intentRoute.shortcutCandidate ?? intentRoute.fallbackReason);
+      logger.info(
+        {
+          route: summarizeIntentRouteForLog(intentRoute),
+          chosenHandler,
+          missingIntegrationDecision: missingRequiredIntegrations.map(
+            (integration) => integration.key
+          )
+        },
+        "Inbound intent route"
+      );
       const replyToUser = async (
         message: string,
         options: { allowSetupHint?: boolean } = {}
@@ -242,15 +276,25 @@ export class AgentOrchestrator {
         return;
       }
 
-      const missingRequiredIntegrations = missingIntegrationsForRequest(
-        preparedInput.text,
-        setupStatus
-      );
       if (missingRequiredIntegrations.length > 1) {
+        logger.info(
+          {
+            route: summarizeIntentRouteForLog(intentRoute),
+            missingIntegrations: missingRequiredIntegrations.map((integration) => integration.key)
+          },
+          "Inbound intent route missing integrations"
+        );
         await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
         return;
       }
       if (missingRequiredIntegrations.length === 1) {
+        logger.info(
+          {
+            route: summarizeIntentRouteForLog(intentRoute),
+            missingIntegrations: missingRequiredIntegrations.map((integration) => integration.key)
+          },
+          "Inbound intent route missing integration"
+        );
         await replyToUser(formatMissingIntegrationForWhatsApp(missingRequiredIntegrations[0]!), {
           allowSetupHint: false
         });
@@ -258,13 +302,14 @@ export class AgentOrchestrator {
       }
 
       const confirmationIntent = parseConfirmationIntent(preparedInput.text);
-      if (confirmationIntent) {
+      if (confirmationIntent && (pendingAction || isHighConfidenceConfirmationRoute(intentRoute))) {
         const handled = await this.handleConfirmationIntent({
           intent: confirmationIntent,
           to: preparedInput.from,
           user,
           conversation,
-          latestUserMessage: preparedInput.text
+          latestUserMessage: preparedInput.text,
+          pendingAction
         });
         if (handled) return;
       }
@@ -273,7 +318,11 @@ export class AgentOrchestrator {
         preparedInput.text,
         history
       );
-      if (shouldUseTextShortcuts && oneTimeAutomationDigest) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "one_time_morning_digest" &&
+        oneTimeAutomationDigest
+      ) {
         await replyToUser(
           await this.runOneTimeMorningDigest({
             user,
@@ -285,7 +334,11 @@ export class AgentOrchestrator {
       }
 
       const missingAutomationRetry = matchMissingAutomationDigestRetry(preparedInput.text, history);
-      if (shouldUseTextShortcuts && missingAutomationRetry) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "missing_digest_retry" &&
+        missingAutomationRetry
+      ) {
         const calendarWindow = calendarOverviewWindow("today", user.timezone);
         const [gmailResult, calendarResult, asanaResult] = await Promise.all([
           missingAutomationRetry.gmail
@@ -350,7 +403,11 @@ export class AgentOrchestrator {
         preparedInput.text,
         memoryEntries
       );
-      if (shouldUseTextShortcuts && ambiguousBulkComplete) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "ambiguous_asana_bulk_complete" &&
+        ambiguousBulkComplete
+      ) {
         const scopeLabel = ambiguousBulkComplete.projectName
           ? `${ambiguousBulkComplete.taskCount} listed tasks in ${ambiguousBulkComplete.projectName}`
           : `${ambiguousBulkComplete.taskCount} listed tasks`;
@@ -362,7 +419,11 @@ export class AgentOrchestrator {
         preparedInput.text,
         memoryEntries
       );
-      if (shouldUseTextShortcuts && recentGoogleDocToDelete) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "recent_google_doc_delete" &&
+        recentGoogleDocToDelete
+      ) {
         const result = await this.toolExecutor.executeToolCall(
           "drive_delete_file",
           { fileId: recentGoogleDocToDelete.documentId },
@@ -382,7 +443,7 @@ export class AgentOrchestrator {
       }
 
       const genericCalendarOverview =
-        shouldUseTextShortcuts && !isCompoundIntent
+        shouldUseTextShortcuts && intentRoute.shortcutCandidate === "calendar_overview"
           ? (matchGenericCalendarOverviewRequest(preparedInput.text) ??
             matchCalendarAllCalendarsFollowUpRequest(preparedInput.text, history))
           : null;
@@ -419,13 +480,56 @@ export class AgentOrchestrator {
         return;
       }
 
+      if (shouldUseTextShortcuts && intentRoute.shortcutCandidate === "asana_project_tasks") {
+        const projectName = routeEntityValue(intentRoute, "asana_project_name");
+        if (projectName) {
+          const result = await this.toolExecutor.executeToolCall(
+            "asana_list_project_tasks",
+            {
+              projectName,
+              completed: false,
+              limit: 50,
+              sortBy: "due",
+              sortDirection: "asc"
+            },
+            {
+              user,
+              conversation,
+              latestUserMessage: preparedInput.text
+            }
+          );
+
+          if (!result.ok) {
+            await replyToUser(
+              result.userMessage ??
+                "I couldn't load those Asana project tasks right now. Try again in a moment."
+            );
+            return;
+          }
+
+          await replyToUser(
+            formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+              label: "from project",
+              emptyLabel: `I don't see open Asana tasks in ${projectName}.`,
+              scopeName: projectName,
+              emphasizeImportance: false
+            })
+          );
+          return;
+        }
+      }
+
       const asanaTodayAndLatestOpen = matchAsanaDueTodayAndLatestOpenRequest(
         preparedInput.text,
         history,
         memoryEntries,
         user.timezone
       );
-      if (shouldUseTextShortcuts && asanaTodayAndLatestOpen) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_today_and_latest_open" &&
+        asanaTodayAndLatestOpen
+      ) {
         const [todayResult, latestOpenResult] = await Promise.all([
           this.toolExecutor.executeToolCall(
             "asana_list_my_tasks",
@@ -490,7 +594,11 @@ export class AgentOrchestrator {
         history,
         memoryEntries
       );
-      if (shouldUseTextShortcuts && !isCompoundIntent && asanaLatestShortcut) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_latest_task" &&
+        asanaLatestShortcut
+      ) {
         const toolName =
           asanaLatestShortcut.scope === "project"
             ? "asana_list_project_tasks"
@@ -541,7 +649,11 @@ export class AgentOrchestrator {
         memoryEntries,
         user.timezone
       );
-      if (shouldUseTextShortcuts && !isCompoundIntent && asanaListShortcut) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_list" &&
+        asanaListShortcut
+      ) {
         const toolName =
           asanaListShortcut.scope === "project"
             ? "asana_list_project_tasks"
@@ -586,7 +698,11 @@ export class AgentOrchestrator {
       }
 
       const genericAsanaOpenTasks = matchGenericAsanaOpenTasksRequest(preparedInput.text);
-      if (shouldUseTextShortcuts && !isCompoundIntent && genericAsanaOpenTasks) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_open_tasks" &&
+        genericAsanaOpenTasks
+      ) {
         const result = await this.toolExecutor.executeToolCall(
           "asana_list_my_tasks",
           {
@@ -621,7 +737,11 @@ export class AgentOrchestrator {
       }
 
       const genericAsanaTaskOverview = matchGenericAsanaMyTasksRequest(preparedInput.text);
-      if (shouldUseTextShortcuts && !isCompoundIntent && genericAsanaTaskOverview) {
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_my_tasks" &&
+        genericAsanaTaskOverview
+      ) {
         const result = await this.toolExecutor.executeToolCall(
           "asana_list_my_tasks",
           {
@@ -653,17 +773,13 @@ export class AgentOrchestrator {
         return;
       }
 
-      const pendingAction = await resolvePendingActionFromConversation(
-        this.prisma,
-        user.id,
-        conversation.id
-      );
       const conversationContext = buildConversationContext({
         latestUserMessage: preparedInput.text,
         memoryEntries,
         pendingAction,
-        pendingActionSummary: buildPendingActionContext(pendingAction),
-        userProfile: setupStatusProfileLines(setupStatus, user.timezone)
+        pendingActionSummary,
+        userProfile: setupStatusProfileLines(setupStatus, user.timezone),
+        intentRoute
       });
       const prompt = buildSystemPrompt({
         timezone: user.timezone,
@@ -814,12 +930,15 @@ export class AgentOrchestrator {
     user: User;
     conversation: Conversation;
     latestUserMessage: string;
+    pendingAction?: PendingAction | null;
   }): Promise<boolean> {
-    const pending = await resolvePendingActionFromConversation(
-      this.prisma,
-      input.user.id,
-      input.conversation.id
-    );
+    const pending =
+      input.pendingAction ??
+      (await resolvePendingActionFromConversation(
+        this.prisma,
+        input.user.id,
+        input.conversation.id
+      ));
 
     if (!pending) {
       if (input.intent === "CANCEL") {
@@ -922,6 +1041,17 @@ export class AgentOrchestrator {
 
 function normalizePhone(phone: string): string {
   return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+function isHighConfidenceConfirmationRoute(route: IntentRoute): boolean {
+  return (
+    route.confidence === "high" &&
+    (route.action === "confirm" || route.action === "cancel" || route.action === "send")
+  );
+}
+
+function routeEntityValue(route: IntentRoute, type: string): string | null {
+  return route.entities.find((entity) => entity.type === type)?.value ?? null;
 }
 
 function isFirstInteraction(history: Array<{ role?: unknown }>): boolean {

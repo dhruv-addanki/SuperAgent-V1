@@ -3,6 +3,7 @@ import {
   buildConversationContext,
   formatConversationContextForPrompt
 } from "../src/modules/agent/conversationContext";
+import { classifyIntentRoute } from "../src/modules/agent/intentRouter";
 
 describe("conversation context", () => {
   it("keeps only active-app context while preserving user preferences", () => {
@@ -115,6 +116,23 @@ describe("conversation context", () => {
     );
     expect(context.activeEntities).toContain("Asana task: Submit homework (taskGid: task_1)");
     expect(context.activeEntities.join("\n")).not.toContain("Unrelated");
+  });
+
+  it("uses the central route instead of broad app detection when provided", () => {
+    const intentRoute = classifyIntentRoute({ text: "schedule looks packed" });
+    const context = buildConversationContext({
+      latestUserMessage: "schedule looks packed",
+      memoryEntries: [],
+      pendingAction: null,
+      pendingActionSummary: "No pending actions.",
+      intentRoute
+    });
+
+    const formatted = formatConversationContextForPrompt(context);
+
+    expect(context.activeApp).toBe("general");
+    expect(formatted).toContain("Routing:");
+    expect(formatted).toContain("Intent route: general/unknown/low");
   });
 
   it("drops stale recent context from the prompt assembly", () => {
