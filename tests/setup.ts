@@ -7,6 +7,7 @@ process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-openai-key";
 process.env.OPENAI_TRANSCRIPTION_MODEL =
   process.env.OPENAI_TRANSCRIPTION_MODEL ?? "gpt-4o-mini-transcribe";
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? "test-encryption-key";
+process.env.ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN ?? "test-admin-token";
 process.env.WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN ?? "verify";
 process.env.WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN ?? "dev-whatsapp-token";
 process.env.WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID ?? "phone-id";

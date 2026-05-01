@@ -131,6 +131,7 @@ Public URLs:
 
 - `APP_BASE_URL`: Public base URL for OAuth start/callback links.
 - `WEBHOOK_PUBLIC_URL`: Public ngrok or deployed URL for Meta webhook setup.
+- `ADMIN_API_TOKEN`: Bearer token for protected admin endpoints and CLI commands.
 
 WhatsApp:
 
@@ -239,6 +240,7 @@ http://localhost:3000/auth/notion/callback
 4. Put `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET`, and `NOTION_REDIRECT_URI` in `.env`.
 
 The assistant replies with a Notion connect link when a Notion tool is used without a connected Notion account.
+
 - `attachments:delete`
 - `custom_fields:read`
 - `custom_fields:write`
@@ -293,6 +295,33 @@ https://your-ngrok-domain.ngrok-free.app/webhooks/whatsapp
 5. Put `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` in `.env`.
 
 The POST route accepts text messages and audio messages from WhatsApp voice memos. Audio is downloaded from WhatsApp, transcribed with OpenAI, and then handled by the same agent pipeline as typed text.
+
+## Admin WhatsApp Outbound
+
+Protected admin endpoints:
+
+```text
+POST /admin/whatsapp/outbound
+POST /admin/whatsapp/outbound/confirm
+POST /admin/whatsapp/outbound/cancel
+```
+
+All admin routes require:
+
+```text
+Authorization: Bearer <ADMIN_API_TOKEN>
+```
+
+CLI examples:
+
+```bash
+pnpm admin:whatsapp -- --phone +17035974755 --exact "Exact text to send"
+pnpm admin:whatsapp -- --phone +17035974755 --prompt "Draft a short reconnect note"
+pnpm admin:whatsapp -- --confirm <approval-code>
+pnpm admin:whatsapp -- --cancel <approval-code>
+```
+
+Exact sends are delivered immediately. Prompted sends create a pending draft and require confirmation. Outside WhatsApp's 24-hour session window, outbound delivery uses `WHATSAPP_AUTOMATION_TEMPLATE_NAME` when configured.
 
 ## Agent Tools
 

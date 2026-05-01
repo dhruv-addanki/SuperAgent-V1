@@ -20,6 +20,7 @@ import { registerHealthRoutes } from "../routes/health";
 import { registerAsanaAuthRoutes } from "../routes/authAsana";
 import { registerGoogleAuthRoutes } from "../routes/authGoogle";
 import { registerNotionAuthRoutes } from "../routes/authNotion";
+import { registerAdminWhatsAppRoutes } from "../routes/adminWhatsapp";
 import { registerWhatsAppWebhookRoutes } from "../routes/whatsappWebhook";
 
 export interface BuildAppOptions {
@@ -106,6 +107,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerGoogleAuthRoutes(app, googleOAuthService);
   await registerAsanaAuthRoutes(app, asanaOAuthService);
   await registerNotionAuthRoutes(app, notionOAuthService);
+  await registerAdminWhatsAppRoutes(app, { prisma, responsesClient, whatsappService });
   await registerWhatsAppWebhookRoutes(app, { agent, queue });
 
   app.addHook("onClose", async () => {

@@ -41,6 +41,7 @@ const envSchema = z
 
     APP_BASE_URL: z.string().url().default("http://localhost:3000"),
     WEBHOOK_PUBLIC_URL: z.string().optional().default(""),
+    ADMIN_API_TOKEN: z.string().min(1).default("dev-admin-token"),
 
     WHATSAPP_VERIFY_TOKEN: z.string().min(1).default("dev-verify-token"),
     WHATSAPP_ACCESS_TOKEN: z.string().min(1).default("dev-whatsapp-token"),
@@ -80,6 +81,7 @@ const envSchema = z
 
     const productionRequired: Array<keyof typeof value> = [
       "OPENAI_API_KEY",
+      "ADMIN_API_TOKEN",
       "WHATSAPP_VERIFY_TOKEN",
       "WHATSAPP_ACCESS_TOKEN",
       "WHATSAPP_PHONE_NUMBER_ID",

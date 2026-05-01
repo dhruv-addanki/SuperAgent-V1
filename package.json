@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/app/server.ts",
     "start": "node dist/src/app/server.js",
+    "admin:whatsapp": "tsx src/scripts/adminWhatsapp.ts",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
