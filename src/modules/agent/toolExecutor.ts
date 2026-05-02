@@ -109,6 +109,31 @@ function mentionsExplicitDueTime(latestUserMessage: string): boolean {
   return TIME_OF_DAY_PATTERN.test(latestUserMessage);
 }
 
+function shouldKeepAsanaCreateProjectContext(input: any, latestUserMessage: string): boolean {
+  const projectNames = Array.isArray(input.projectNames)
+    ? input.projectNames.filter((name: unknown): name is string => typeof name === "string")
+    : [];
+  const projectGids = Array.isArray(input.projectGids)
+    ? input.projectGids.filter((gid: unknown): gid is string => typeof gid === "string")
+    : [];
+
+  if (!projectNames.length && !projectGids.length) return true;
+
+  const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
+  if (/\b(same|that|this|current|previous)\s+project\b/.test(normalized)) return true;
+  if (/\b(?:in|inside|under)\s+(?:the\s+)?(?:asana\s+)?project\b/.test(normalized)) return true;
+
+  const projectLabels = [...projectNames, ...projectGids];
+  return projectLabels.some((name) => {
+    const normalizedName = name.toLowerCase().replace(/\s+/g, " ").trim();
+    if (!normalizedName) return false;
+    const escapedName = escapeRegExp(normalizedName);
+    return new RegExp(`\\b(?:in|inside|under|to|for)\\s+(?:the\\s+)?${escapedName}\\b`).test(
+      normalized
+    );
+  });
+}
+
 function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMessage: string): any {
   if (toolName === "asana_bulk_update_tasks") {
     const seen = new Set<string>();
@@ -142,6 +167,14 @@ function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMess
   const normalized = { ...input };
   const hasDueOn = Object.prototype.hasOwnProperty.call(normalized, "dueOn");
   const hasDueAt = Object.prototype.hasOwnProperty.call(normalized, "dueAt");
+
+  if (
+    toolName === "asana_create_task" &&
+    !shouldKeepAsanaCreateProjectContext(normalized, latestUserMessage)
+  ) {
+    delete normalized.projectGids;
+    delete normalized.projectNames;
+  }
 
   if (!hasDueOn && !hasDueAt) return normalized;
 
@@ -2070,6 +2103,10 @@ function asanaBulkFailureNextStep(code: string): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function defaultToolFailureMessage(toolName: ToolName): string {

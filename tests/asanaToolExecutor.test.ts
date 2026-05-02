@@ -311,6 +311,59 @@ describe("tool executor Asana flows", () => {
     );
   });
 
+  it("strips inferred project context when the create request does not mention a project", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        name: "test 1",
+        dueOn: "2026-05-03",
+        projectGids: ["project_2"],
+        projectNames: ["School"],
+        assigneeGid: "me"
+      },
+      makeContext("add a test 1 task due tmr")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "test 1",
+        dueOn: "2026-05-03",
+        projectGids: undefined,
+        assigneeGid: "user_asana_1"
+      })
+    );
+  });
+
+  it("keeps explicit project context when the create request names the project", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        name: "test 1",
+        dueOn: "2026-05-03",
+        projectGids: ["project_2"],
+        projectNames: ["Content"],
+        assigneeGid: "me"
+      },
+      makeContext("add a test 1 task in Content due tmr")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "test 1",
+        dueOn: "2026-05-03",
+        projectGids: ["project_2"],
+        projectNames: ["Content"],
+        assigneeGid: "user_asana_1"
+      })
+    );
+  });
+
   it("normalizes null-like assignee strings to the connected Asana user", async () => {
     const executor = makeExecutor();
 
