@@ -503,27 +503,32 @@ function compoundSafeShortcut(shortcut: IntentShortcutCandidate): boolean {
 }
 
 function referencesSetup(normalized: string): boolean {
+  const setupText = stripNamedObjectText(normalized);
   return (
-    /^(setup|set up|connect|connections|integrations|status)$/.test(normalized) ||
+    /^(setup|set up|connect|connections|integrations|status)$/.test(setupText) ||
     /^(?:show|check|view) (?:my )?(?:setup|connections|integrations|connected accounts|account status)$/.test(
-      normalized
+      setupText
     ) ||
-    /^what(?:'s| is) connected$/.test(normalized) ||
-    /^which (?:accounts|integrations) (?:are )?connected$/.test(normalized) ||
-    /^help (?:me )?(?:setting|set) up$/.test(normalized) ||
+    /^what(?:'s| is) connected$/.test(setupText) ||
+    /^which (?:accounts|integrations) (?:are )?connected$/.test(setupText) ||
+    /^help (?:me )?(?:setting|set) up$/.test(setupText) ||
     /^(?:connect|reconnect) (?:my )?(?:accounts|integrations|google|asana|notion)$/.test(
-      normalized
+      setupText
     ) ||
     /^(?:connect|reconnect) (?:my )?.*\b(?:google|asana|notion|accounts|integrations)\b/.test(
-      normalized
+      setupText
     ) ||
     /\b(?:google|gmail|calendar|drive|docs?|asana|notion)\b.*\b(link|url|auth|oauth|connect|reconnect|login|sign in|page picker|select pages?)\b/.test(
-      normalized
+      setupText
     ) ||
     /\b(link|url|auth|oauth|connect|reconnect|login|sign in|page picker|select pages?)\b.*\b(?:google|gmail|calendar|drive|docs?|asana|notion)\b/.test(
-      normalized
+      setupText
     )
   );
+}
+
+function stripNamedObjectText(normalized: string): string {
+  return normalized.replace(/\b(?:called|named|titled)\b.*$/i, "").trim();
 }
 
 function referencesAutomation(normalized: string): boolean {

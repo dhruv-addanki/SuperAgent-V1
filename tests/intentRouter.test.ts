@@ -79,6 +79,20 @@ describe("intent router", () => {
     });
   });
 
+  it("does not treat setup words inside Asana task names as reconnect requests", () => {
+    const route = classifyIntentRoute({
+      text: "add a task to asana called oauth reconnect test due tmr"
+    });
+
+    expect(route).toMatchObject({
+      domains: ["asana"],
+      primaryDomain: "asana",
+      action: "create",
+      requiredIntegrations: ["asana"]
+    });
+    expect(route.trace).not.toContain("setup:high:setup_request");
+  });
+
   it("routes email send requests as Gmail drafts", () => {
     const route = classifyIntentRoute({ text: "send an email to Brad" });
 
