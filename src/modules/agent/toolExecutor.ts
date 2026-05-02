@@ -978,7 +978,9 @@ export class ToolExecutor {
     userId: string,
     input: { assigneeGid?: string; projectGids?: string[] }
   ): Promise<string | undefined> {
-    if (input.assigneeGid || input.projectGids?.length) return input.assigneeGid;
+    if (input.assigneeGid && !isAsanaSelfOrEmptyAssignee(input.assigneeGid)) {
+      return input.assigneeGid;
+    }
 
     const account = await (this.prisma as any).asanaAccount?.findUnique?.({
       where: { userId },
@@ -1954,6 +1956,10 @@ function errorCode(error: unknown): string {
     if (typeof code === "string" && code.trim()) return code;
   }
   return "ASANA_UNKNOWN_ERROR";
+}
+
+function isAsanaSelfOrEmptyAssignee(value: string): boolean {
+  return /^(me|null|none|undefined|unassigned|no assignee)$/i.test(value.trim());
 }
 
 function isRetryableAsanaError(error: unknown): boolean {

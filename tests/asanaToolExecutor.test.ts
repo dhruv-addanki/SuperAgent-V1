@@ -292,12 +292,12 @@ describe("tool executor Asana flows", () => {
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(3);
   });
 
-  it("does not default assignee when creating in an Asana project", async () => {
+  it("defaults project task creation to the connected Asana user", async () => {
     const executor = makeExecutor();
 
     const result = await executor.executeToolCall(
       "asana_create_task",
-      { name: "Update wellness score", projectGids: ["Scanis"] },
+      { name: "Update wellness score", projectGids: ["Scanis"], assigneeGid: "me" },
       makeContext("Create this in Scanis")
     );
 
@@ -306,7 +306,43 @@ describe("tool executor Asana flows", () => {
       expect.objectContaining({
         name: "Update wellness score",
         projectGids: ["project_1"],
-        assigneeGid: undefined
+        assigneeGid: "user_asana_1"
+      })
+    );
+  });
+
+  it("normalizes null-like assignee strings to the connected Asana user", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      { workspaceGid: "workspace_1", name: "Cancel Coddy subscription", assigneeGid: "null" },
+      makeContext("Create an Asana task")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Cancel Coddy subscription",
+        assigneeGid: "user_asana_1"
+      })
+    );
+  });
+
+  it("keeps an explicit real assignee ID for task creation", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      { workspaceGid: "workspace_1", name: "Assigned task", assigneeGid: "1200000000000001" },
+      makeContext("Create an Asana task for Brad")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Assigned task",
+        assigneeGid: "1200000000000001"
       })
     );
   });
