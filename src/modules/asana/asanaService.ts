@@ -712,7 +712,7 @@ export class AsanaService {
     };
 
     if (!response.ok) {
-      throw this.mapError(response.status, path, payload.errors?.[0]?.message);
+      throw this.mapError(response.status, path, payload.errors?.[0]?.message, input.body);
     }
 
     return {
@@ -765,7 +765,7 @@ export class AsanaService {
     throw mapped;
   }
 
-  private mapError(status: number, path: string, detail?: string): Error {
+  private mapError(status: number, path: string, detail?: string, body?: unknown): Error {
     if (status === 400 && path.includes("/users/me/user_task_list")) {
       return new UserFacingError(
         "Asana My Tasks unavailable",
@@ -832,6 +832,14 @@ export class AsanaService {
       );
     }
 
+    if (status >= 500 && hasAsanaAssigneeMutation(body)) {
+      return new UserFacingError(
+        "Asana assignee write unavailable",
+        "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+        "Asana is rejecting assigned task writes right now (ASANA_ASSIGNEE_WRITE_UNAVAILABLE). I did not create an unassigned task because it may not show in My Tasks. Try reconnecting Asana or creating the task directly in Asana if this persists."
+      );
+    }
+
     if (status >= 500) {
       return new UserFacingError(
         "Asana unavailable",
@@ -846,6 +854,13 @@ export class AsanaService {
 
 function isRetryableAsanaStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
+}
+
+function hasAsanaAssigneeMutation(body: unknown): boolean {
+  if (!body || typeof body !== "object" || !("data" in body)) return false;
+  const data = (body as { data?: unknown }).data;
+  if (!data || typeof data !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(data, "assignee");
 }
 
 function delay(ms: number): Promise<void> {

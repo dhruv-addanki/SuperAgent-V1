@@ -400,6 +400,45 @@ describe("asana service", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("maps repeated assigned create server failures to assignee diagnostics", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ errors: [{ message: "unexpected input" }] })
+    });
+
+    await expect(
+      new AsanaService("token").createTask({
+        workspaceGid: "workspace_1",
+        name: "Assigned task",
+        dueOn: "2026-05-03",
+        assigneeGid: "user_1"
+      })
+    ).rejects.toMatchObject({
+      code: "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+      userMessage: expect.stringContaining("did not create an unassigned task")
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("maps repeated assigned update server failures to assignee diagnostics", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ errors: [{ message: "unexpected input" }] })
+    });
+
+    await expect(
+      new AsanaService("token").updateTask({
+        taskGid: "task_1",
+        assigneeGid: "user_1"
+      })
+    ).rejects.toMatchObject({
+      code: "ASANA_ASSIGNEE_WRITE_UNAVAILABLE"
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("maps repeated network failures to network diagnostics", async () => {
     fetchMock.mockRejectedValue(new Error("socket closed"));
 
