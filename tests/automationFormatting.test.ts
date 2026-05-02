@@ -80,7 +80,39 @@ describe("automation formatting", () => {
     expect(message).not.toContain("retry the missing parts");
     expect(message).not.toMatch(/[—–]/);
     expect(message).not.toMatch(/ [–—-] /);
-    expect(message.split("\n").length).toBeLessThanOrEqual(20);
+    expect(message.split("\n").length).toBeLessThanOrEqual(26);
+  });
+
+  it("backfills empty daily digest planning sections", () => {
+    const message = formatAutomationDigest(
+      "Morning email, calendar, and Asana digest",
+      [
+        "At a glance: Light calendar day, but your inbox has a few genuinely important items.",
+        "",
+        "Schedule:",
+        "• 1:00 PM to 2:00 PM: Go visit Maple Ridge for food",
+        "",
+        "Email:",
+        "• Most important: Official Treasury job offer from USA Staffing",
+        "• Also important: New hire additional tasks assigned in USA Staffing onboarding",
+        "",
+        "Asana:",
+        "Action items:",
+        "Further prompts:",
+        '"Summarize the Treasury offer email"',
+        '"Show me today’s top 10 Asana tasks"'
+      ].join("\n")
+    );
+
+    expect(message).toContain("Asana:\n• No Asana priorities were surfaced in this run.");
+    expect(message).toContain("Focus plan:");
+    expect(message).toContain("Action items:");
+    expect(message).toContain("• Review the highest priority email");
+    expect(message).toContain("Further prompts:");
+    expect(message).toContain('"Make a 2-hour focus plan from my calendar and Asana"');
+    expect(message).not.toContain("Asana:\nAction items:");
+    expect(message).not.toContain("Action items:\nFurther prompts:");
+    expect(message).not.toContain("Watchouts:");
   });
 
   it("keeps quiet day digests compact and does not add urgency", () => {

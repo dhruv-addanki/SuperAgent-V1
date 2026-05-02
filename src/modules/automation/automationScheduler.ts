@@ -419,8 +419,13 @@ export class AutomationScheduler {
 export function formatAutomationDigest(name: string, body: string): string {
   const compactBody =
     capAutomationDigestLines(
-      stripEmptyDigestSections(
-        normalizeDigestSectionLabels(stripWeakDigestTail(stripRedundantDigestHeading(body.trim())))
+      ensurePlanningDigestSections(
+        name,
+        stripEmptyDigestSections(
+          normalizeDigestSectionLabels(
+            stripWeakDigestTail(stripRedundantDigestHeading(body.trim()))
+          )
+        )
       )
     ) || "No summary was produced.";
   return normalizeAssistantMessageForUser(`${name}\n\n${compactBody}`);
@@ -439,6 +444,9 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- Use these section labels when relevant: At a glance, Schedule, Email, Asana, Focus plan, Action items, Further prompts.",
     "- Never output Watchouts. Convert risks, conflicts, source failures, and time-sensitive items into concrete Action items.",
     "- Never output an empty section label. If there are no concrete actions, omit Action items. If there are no exact suggested commands, omit Further prompts.",
+    "- For daily planning digests, always include Focus plan when at least one source loaded successfully.",
+    "- For daily planning digests, Action items must contain concrete next actions, not just a heading.",
+    "- For daily planning digests, Further prompts should contain 3 exact quoted commands unless the automation could not run.",
     "- Start with At a glance: one line summarizing the day, urgency, conflicts, and top focus.",
     "- Keep Schedule short. Include key events and conflicts, not every detail when the day is busy.",
     "- Use Email for urgent or important threads first, then newsletters/promos only as a compact rollup when useful.",
@@ -591,6 +599,149 @@ function stripEmptyDigestSections(body: string): string {
     .trim();
 }
 
+function ensurePlanningDigestSections(name: string, body: string): string {
+  if (!isPlanningDigestName(name) || !body.trim()) return body;
+
+  const withAsana = ensureAsanaSection(name, body);
+  const withFocusPlan = digestHasSection(withAsana, "focus plan")
+    ? withAsana
+    : insertDigestSection(
+        withAsana,
+        "Focus plan",
+        [
+          "First block: handle the most time-sensitive email or admin item.",
+          "Midday: work around fixed calendar events and protect transition time.",
+          "Second block: move one Asana priority forward."
+        ],
+        ["action items", "further prompts"]
+      );
+  const withActionItems = digestHasSection(withFocusPlan, "action items")
+    ? withFocusPlan
+    : insertDigestSection(
+        withFocusPlan,
+        "Action items",
+        [
+          "Review the highest priority email and decide the next response or task.",
+          "Pick one Asana task to move forward today.",
+          "Use calendar gaps for one focused work block."
+        ],
+        ["further prompts"]
+      );
+
+  return ensureFurtherPromptCount(withActionItems);
+}
+
+function ensureAsanaSection(name: string, body: string): string {
+  if (!/\basana\b/i.test(name) || digestHasSection(body, "asana")) return body;
+
+  const unavailable =
+    /\basana\b[^\n]*(?:unavailable|failed|couldn'?t|could not|unable|missing)/i.test(body);
+  return insertDigestSection(
+    body,
+    "Asana",
+    [
+      unavailable
+        ? "Asana was unavailable in this run; retry before relying on the task list."
+        : "No Asana priorities were surfaced in this run. Ask for the task list if you want the raw view."
+    ],
+    ["focus plan", "action items", "further prompts"]
+  );
+}
+
+function ensureFurtherPromptCount(body: string): string {
+  const lines = body.split("\n");
+  const headingIndex = lines.findIndex((line) => digestSectionName(line) === "further prompts");
+
+  if (headingIndex < 0) {
+    return insertDigestSection(
+      body,
+      "Further prompts",
+      defaultFurtherPrompts([]).map((prompt) => prompt.replace(/^"|"$/g, "")),
+      []
+    );
+  }
+
+  const nextHeadingIndex = findNextDigestHeadingIndex(lines, headingIndex + 1);
+  const sectionEnd = nextHeadingIndex >= 0 ? nextHeadingIndex : lines.length;
+  const existingPrompts = lines
+    .slice(headingIndex + 1, sectionEnd)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const normalizedExisting = new Set(existingPrompts.map(normalizePromptLine));
+  const additions = defaultFurtherPrompts(existingPrompts)
+    .filter((prompt) => !normalizedExisting.has(normalizePromptLine(prompt)))
+    .slice(0, Math.max(0, 3 - existingPrompts.length));
+  if (!additions.length) return body;
+
+  const next = [...lines];
+  next.splice(sectionEnd, 0, ...additions);
+  return next.join("\n").trim();
+}
+
+function defaultFurtherPrompts(existingPrompts: string[]): string[] {
+  const existing = existingPrompts.map(normalizePromptLine).join("\n");
+  return [
+    /\b(email|inbox|offer|thread|summarize)\b/.test(existing)
+      ? null
+      : '"Summarize the most important email"',
+    /\b(asana|tasks?)\b/.test(existing) ? null : '"Show me today’s top 10 Asana tasks"',
+    /\b(focus|plan|block|calendar)\b/.test(existing)
+      ? null
+      : '"Make a 2-hour focus plan from my calendar and Asana"'
+  ].filter((prompt): prompt is string => Boolean(prompt));
+}
+
+function insertDigestSection(
+  body: string,
+  heading: string,
+  items: string[],
+  beforeSections: string[]
+): string {
+  const sectionLines = [`${heading}:`, ...items.map((item) => `• ${item}`)];
+  const lines = body.split("\n");
+  const insertIndex = beforeSections.length
+    ? lines.findIndex((line) => {
+        const section = digestSectionName(line);
+        return Boolean(section && beforeSections.includes(section));
+      })
+    : -1;
+
+  if (insertIndex < 0) {
+    return [body.trim(), sectionLines.join("\n")].filter(Boolean).join("\n\n");
+  }
+
+  const next = [...lines];
+  const previousLine = next[insertIndex - 1] ?? "";
+  const prefix = previousLine.trim() ? [""] : [];
+  next.splice(insertIndex, 0, ...prefix, ...sectionLines, "");
+  return next
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function digestHasSection(body: string, sectionName: string): boolean {
+  return body.split("\n").some((line) => digestSectionName(line) === sectionName);
+}
+
+function findNextDigestHeadingIndex(lines: string[], startIndex: number): number {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    if (isDigestSectionHeading(lines[index] ?? "")) return index;
+  }
+  return -1;
+}
+
+function normalizePromptLine(line: string): string {
+  return line
+    .trim()
+    .replace(/^["'“”]+|["'“”]+$/g, "")
+    .toLowerCase();
+}
+
+function isPlanningDigestName(name: string): boolean {
+  return /\bdigest\b/i.test(name);
+}
+
 function isDigestSectionHeading(line: string): boolean {
   return digestSectionName(line) !== null;
 }
@@ -634,11 +785,11 @@ function capAutomationDigestLines(body: string): string {
     .split("\n")
     .map((line) => line.trimEnd())
     .filter((line, index, allLines) => line.trim() || (index > 0 && allLines[index - 1]?.trim()));
-  const maxLines = 18;
+  const maxLines = 24;
   if (lines.length <= maxLines) return lines.join("\n").trim();
 
   const selected = new Set<number>();
-  for (let index = 0; index < lines.length && selected.size < 14; index += 1) {
+  for (let index = 0; index < lines.length && selected.size < 18; index += 1) {
     selected.add(index);
   }
 
@@ -667,7 +818,7 @@ function capAutomationDigestLines(body: string): string {
 }
 
 function isHighValueDigestLine(line: string): boolean {
-  return /\b(conflict|overlap|action items|further prompts|unavailable|failed|couldn'?t|urgent|time sensitive|you can ask me to)\b/i.test(
+  return /\b(conflict|overlap|email|asana|focus plan|action items|further prompts|unavailable|failed|couldn'?t|urgent|time sensitive|you can ask me to)\b/i.test(
     line
   );
 }
