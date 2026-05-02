@@ -974,6 +974,21 @@ export class ToolExecutor {
     );
   }
 
+  private async defaultAsanaCreateAssigneeGid(
+    userId: string,
+    input: { assigneeGid?: string; projectGids?: string[] }
+  ): Promise<string | undefined> {
+    if (input.assigneeGid || input.projectGids?.length) return input.assigneeGid;
+
+    const account = await (this.prisma as any).asanaAccount?.findUnique?.({
+      where: { userId },
+      select: { asanaUserGid: true }
+    });
+    return typeof account?.asanaUserGid === "string" && account.asanaUserGid
+      ? account.asanaUserGid
+      : undefined;
+  }
+
   private async updateAsanaTaskCompletedWithRetry(
     service: AsanaService,
     taskGid: string
@@ -1579,10 +1594,15 @@ export class ToolExecutor {
             input.workspaceGid || !projectGids?.length
               ? await this.resolveAsanaWorkspace(context.user.id, service, input.workspaceGid)
               : undefined;
+          const assigneeGid = await this.defaultAsanaCreateAssigneeGid(context.user.id, {
+            assigneeGid: input.assigneeGid,
+            projectGids
+          });
           const data = await service.createTask({
             ...input,
             workspaceGid,
-            projectGids
+            projectGids,
+            assigneeGid
           });
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
           await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
@@ -1597,7 +1617,7 @@ export class ToolExecutor {
             userId: context.user.id,
             actionType: "asana_create_task",
             toolName,
-            requestPayload: input,
+            requestPayload: { ...input, workspaceGid, projectGids, assigneeGid },
             responsePayload: data,
             status: "executed"
           });

@@ -52,6 +52,9 @@ function makePrisma(initialMemory: Record<string, unknown> = {}) {
         return memory.get(key);
       })
     },
+    asanaAccount: {
+      findUnique: vi.fn(async () => ({ asanaUserGid: "user_asana_1" }))
+    },
     pendingAction: {
       create: vi.fn(async ({ data }) => ({
         id: "pending_1",
@@ -283,9 +286,29 @@ describe("tool executor Asana flows", () => {
     expect(createTaskMock).toHaveBeenCalledWith({
       workspaceGid: "workspace_1",
       name: "Ship Asana integration",
-      projectGids: undefined
+      projectGids: undefined,
+      assigneeGid: "user_asana_1"
     });
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not default assignee when creating in an Asana project", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      { name: "Update wellness score", projectGids: ["Scanis"] },
+      makeContext("Create this in Scanis")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Update wellness score",
+        projectGids: ["project_1"],
+        assigneeGid: undefined
+      })
+    );
   });
 
   it("drops conflicting due fields when the user asks for no due date", async () => {
