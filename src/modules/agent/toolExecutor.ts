@@ -63,6 +63,24 @@ export interface ToolExecutionResult {
   stopAfterTool?: boolean;
 }
 
+interface AsanaTaskPreview {
+  taskGid?: string;
+  name?: string;
+  projectName?: string;
+  dueOn?: string;
+  completed?: boolean;
+}
+
+interface AsanaBulkFailure {
+  taskGid: string;
+  name?: string;
+  projectName?: string;
+  dueOn?: string;
+  error: string;
+  code: string;
+  retryable: boolean;
+}
+
 const NO_DUE_DATE_PATTERNS = [
   /\bno due date\b/,
   /\bwithout (?:a |any )?due date\b/,
@@ -76,6 +94,11 @@ const NO_DUE_DATE_PATTERNS = [
 const TIME_OF_DAY_PATTERN =
   /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b|\b\d{1,2}:\d{2}\b|\bnoon\b|\bmidnight\b/i;
 const GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document";
+const LAST_VISIBLE_ASANA_TASK_LIST_KEY = "last_visible_asana_task_list";
+const LAST_FAILED_ASANA_BULK_UPDATE_KEY = "last_failed_asana_bulk_update";
+const ASANA_BULK_MAX_TASKS = 25;
+const ASANA_BULK_RETRY_ATTEMPTS = 2;
+const ASANA_BULK_RETRY_DELAY_MS = 25;
 
 function requestsNoDueDate(latestUserMessage: string): boolean {
   const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'");
@@ -87,6 +110,31 @@ function mentionsExplicitDueTime(latestUserMessage: string): boolean {
 }
 
 function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMessage: string): any {
+  if (toolName === "asana_bulk_update_tasks") {
+    const seen = new Set<string>();
+    const taskGids = Array.isArray(input.taskGids)
+      ? input.taskGids
+          .filter((taskGid: unknown): taskGid is string => typeof taskGid === "string")
+          .filter((taskGid: string) => {
+            if (seen.has(taskGid)) return false;
+            seen.add(taskGid);
+            return true;
+          })
+          .slice(0, ASANA_BULK_MAX_TASKS)
+      : [];
+    const allowedTaskGids = new Set(taskGids);
+    const taskPreview = Array.isArray(input.taskPreview)
+      ? input.taskPreview
+          .filter((task: AsanaTaskPreview) => !task.taskGid || allowedTaskGids.has(task.taskGid))
+          .slice(0, ASANA_BULK_MAX_TASKS)
+      : undefined;
+    return {
+      ...input,
+      taskGids,
+      ...(taskPreview ? { taskPreview } : {})
+    };
+  }
+
   if (toolName !== "asana_create_task" && toolName !== "asana_update_task") {
     return input;
   }
@@ -496,6 +544,90 @@ export class ToolExecutor {
     });
   }
 
+  private async rememberLastVisibleAsanaTaskList(
+    userId: string,
+    tasks: AsanaTaskSummary[],
+    scopeLabel: string
+  ): Promise<void> {
+    const normalizedTasks = tasks.slice(0, ASANA_BULK_MAX_TASKS).map((task) => ({
+      taskGid: task.gid,
+      name: task.name,
+      completed: task.completed,
+      dueOn: task.dueOn,
+      dueAt: task.dueAt,
+      workspaceGid: task.workspaceGid,
+      workspaceName: task.workspaceName,
+      projectName: task.projects?.[0]?.name,
+      createdAt: task.createdAt,
+      modifiedAt: task.modifiedAt
+    }));
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: LAST_VISIBLE_ASANA_TASK_LIST_KEY } },
+      update: {
+        value: {
+          scopeLabel,
+          tasks: normalizedTasks,
+          createdAt: new Date().toISOString()
+        },
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: LAST_VISIBLE_ASANA_TASK_LIST_KEY,
+        value: {
+          scopeLabel,
+          tasks: normalizedTasks,
+          createdAt: new Date().toISOString()
+        },
+        confidence: 1
+      }
+    });
+  }
+
+  private async rememberLastFailedAsanaBulkUpdate(
+    userId: string,
+    failed: AsanaBulkFailure[],
+    summary: string
+  ): Promise<void> {
+    const retryableTasks = failed
+      .filter((failure) => failure.retryable)
+      .slice(0, ASANA_BULK_MAX_TASKS)
+      .map((failure) => ({
+        taskGid: failure.taskGid,
+        name: failure.name,
+        projectName: failure.projectName,
+        dueOn: failure.dueOn,
+        code: failure.code
+      }));
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: LAST_FAILED_ASANA_BULK_UPDATE_KEY } },
+      update: {
+        value: {
+          summary,
+          retryableTasks,
+          failedCount: failed.length,
+          retryableCount: retryableTasks.length,
+          createdAt: new Date().toISOString()
+        },
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: LAST_FAILED_ASANA_BULK_UPDATE_KEY,
+        value: {
+          summary,
+          retryableTasks,
+          failedCount: failed.length,
+          retryableCount: retryableTasks.length,
+          createdAt: new Date().toISOString()
+        },
+        confidence: 1
+      }
+    });
+  }
+
   private async rememberRecentAsanaProjects(
     userId: string,
     projects: Array<
@@ -840,6 +972,97 @@ export class ToolExecutor {
       "ASANA_TASK_NOT_FOUND",
       `I couldn't find an Asana task named "${taskName}". Ask me to list recent Asana tasks if you want to pick from them.`
     );
+  }
+
+  private async updateAsanaTaskCompletedWithRetry(
+    service: AsanaService,
+    taskGid: string
+  ): Promise<AsanaTaskSummary> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= ASANA_BULK_RETRY_ATTEMPTS; attempt += 1) {
+      try {
+        return await service.updateTask({ taskGid, completed: true });
+      } catch (error) {
+        lastError = error;
+        if (attempt >= ASANA_BULK_RETRY_ATTEMPTS || !isRetryableAsanaError(error)) {
+          throw error;
+        }
+        await delay(ASANA_BULK_RETRY_DELAY_MS * attempt);
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async executeAsanaBulkUpdateTasks(
+    service: AsanaService,
+    input: {
+      taskGids: string[];
+      taskPreview?: AsanaTaskPreview[];
+      source?: "explicit" | "recent_list";
+    },
+    context: ToolExecutionContext,
+    toolName: ToolName
+  ): Promise<ToolExecutionResult> {
+    const previewByGid = new Map(
+      (input.taskPreview ?? [])
+        .filter((task) => task.taskGid)
+        .map((task) => [task.taskGid!, task] as const)
+    );
+    const updated: AsanaTaskSummary[] = [];
+    const failed: AsanaBulkFailure[] = [];
+
+    for (const taskGid of input.taskGids) {
+      try {
+        const task = await this.updateAsanaTaskCompletedWithRetry(service, taskGid);
+        updated.push(task);
+      } catch (error) {
+        const preview = previewByGid.get(taskGid);
+        failed.push({
+          taskGid,
+          name: preview?.name,
+          projectName: preview?.projectName,
+          dueOn: preview?.dueOn,
+          error: serializeError(error),
+          code: errorCode(error),
+          retryable: isRetryableAsanaError(error)
+        });
+      }
+    }
+
+    if (updated.length) {
+      await this.rememberRecentAsanaTasks(context.user.id, updated);
+    }
+
+    const summary = formatAsanaBulkCompletionSummary(updated.length, failed);
+    await this.rememberLastFailedAsanaBulkUpdate(context.user.id, failed, summary);
+
+    const data = {
+      updated,
+      failed,
+      retryableFailures: failed.filter((failure) => failure.retryable),
+      summary
+    };
+
+    await this.audit.log({
+      userId: context.user.id,
+      actionType: "asana_bulk_update_tasks",
+      toolName,
+      requestPayload: {
+        source: input.source ?? "explicit",
+        taskCount: input.taskGids.length,
+        taskGids: input.taskGids
+      },
+      responsePayload: data,
+      status: failed.length ? "failed" : "executed"
+    });
+
+    return {
+      ok: failed.length === 0,
+      data,
+      userMessage: summary
+    };
   }
 
   async executeToolCall(
@@ -1266,10 +1489,12 @@ export class ToolExecutor {
               });
             }
           }
+          await this.rememberLastVisibleAsanaTaskList(context.user.id, data, "My Tasks");
           return { ok: true, data };
         }
 
         if (toolName === "asana_list_project_tasks") {
+          const projectScopeLabel = input.projectName ?? "Project tasks";
           const projectGid = await this.resolveAsanaProjectGid(context.user.id, service, {
             workspaceGid: input.workspaceGid,
             projectGid: input.projectGid,
@@ -1295,6 +1520,7 @@ export class ToolExecutor {
               });
             }
           }
+          await this.rememberLastVisibleAsanaTaskList(context.user.id, data, projectScopeLabel);
           return { ok: true, data };
         }
 
@@ -1322,6 +1548,11 @@ export class ToolExecutor {
             await this.rememberRecentAsanaTasks(context.user.id, data);
             await this.rememberRecentAsanaProjectsFromTasks(context.user.id, data);
           }
+          await this.rememberLastVisibleAsanaTaskList(
+            context.user.id,
+            data,
+            "Asana search results"
+          );
           return { ok: true, data };
         }
 
@@ -1426,42 +1657,7 @@ export class ToolExecutor {
         }
 
         if (toolName === "asana_bulk_update_tasks") {
-          const updated: AsanaTaskSummary[] = [];
-          const failed: Array<{ taskGid: string; error: string }> = [];
-
-          for (const taskGid of input.taskGids) {
-            try {
-              const task = await service.updateTask({ taskGid, completed: true });
-              updated.push(task);
-            } catch (error) {
-              failed.push({ taskGid, error: serializeError(error) });
-            }
-          }
-
-          if (updated.length) {
-            await this.rememberRecentAsanaTasks(context.user.id, updated);
-          }
-
-          const data = {
-            updated,
-            failed,
-            summary: `Completed ${updated.length} Asana task${updated.length === 1 ? "" : "s"}${failed.length ? `; ${failed.length} failed` : ""}.`
-          };
-
-          await this.audit.log({
-            userId: context.user.id,
-            actionType: "asana_bulk_update_tasks",
-            toolName,
-            requestPayload: input,
-            responsePayload: data,
-            status: failed.length ? "failed" : "executed"
-          });
-
-          return {
-            ok: failed.length === 0,
-            data,
-            userMessage: data.summary
-          };
+          return this.executeAsanaBulkUpdateTasks(service, input, context, toolName);
         }
       }
 
@@ -1732,9 +1928,127 @@ export class ToolExecutor {
   }
 }
 
+function errorCode(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.trim()) return code;
+  }
+  return "ASANA_UNKNOWN_ERROR";
+}
+
+function isRetryableAsanaError(error: unknown): boolean {
+  const code = errorCode(error);
+  if (
+    code === "ASANA_RATE_LIMITED" ||
+    code === "ASANA_NETWORK_ERROR" ||
+    code === "ASANA_UNAVAILABLE"
+  ) {
+    return true;
+  }
+
+  if (error && typeof error === "object") {
+    const status = (error as { status?: unknown; response?: { status?: unknown } }).status;
+    const responseStatus = (error as { response?: { status?: unknown } }).response?.status;
+    const numericStatus =
+      typeof status === "number"
+        ? status
+        : typeof responseStatus === "number"
+          ? responseStatus
+          : undefined;
+    return numericStatus === 429 || Boolean(numericStatus && numericStatus >= 500);
+  }
+
+  return false;
+}
+
+function formatAsanaBulkCompletionSummary(
+  updatedCount: number,
+  failed: AsanaBulkFailure[]
+): string {
+  const completedText = `Completed ${updatedCount} Asana task${updatedCount === 1 ? "" : "s"}`;
+  if (!failed.length) return `${completedText}.`;
+
+  const grouped = groupAsanaBulkFailures(failed);
+  if (grouped.length === 1) {
+    const group = grouped[0]!;
+    return `${completedText}; ${failed.length} failed because ${asanaBulkFailureReason(group.code)} ${asanaBulkFailureNextStep(group.code)}`;
+  }
+
+  const reasonLines = grouped
+    .slice(0, 3)
+    .map(
+      (group) =>
+        `${group.count} ${group.code}: ${asanaBulkFailureReason(group.code)} ${asanaBulkFailureNextStep(group.code)}`
+    );
+  return [
+    `${completedText}; ${failed.length} failed.`,
+    "Failed reasons:",
+    ...reasonLines.map((line) => `• ${line}`)
+  ].join("\n");
+}
+
+function groupAsanaBulkFailures(
+  failed: AsanaBulkFailure[]
+): Array<{ code: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const failure of failed) {
+    counts.set(failure.code, (counts.get(failure.code) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([code, count]) => ({ code, count }));
+}
+
+function asanaBulkFailureReason(code: string): string {
+  if (code === "ASANA_NOT_FOUND" || code === "ASANA_TASK_NOT_FOUND") {
+    return "Asana could not find those task IDs.";
+  }
+  if (code === "ASANA_FORBIDDEN") {
+    return "the connected Asana account does not have access to those tasks.";
+  }
+  if (code === "ASANA_SCOPE_MISSING" || code === "ASANA_REAUTH_REQUIRED") {
+    return "Asana needs refreshed task permissions.";
+  }
+  if (code === "ASANA_AUTH_EXPIRED") {
+    return "the Asana connection expired.";
+  }
+  if (code === "ASANA_RATE_LIMITED") {
+    return "Asana is rate limiting updates.";
+  }
+  if (code === "ASANA_NETWORK_ERROR" || code === "ASANA_UNAVAILABLE") {
+    return "Asana could not be reached after retries.";
+  }
+  if (code === "ASANA_BAD_REQUEST") {
+    return "Asana rejected the update request.";
+  }
+  return "Asana returned an unexpected error.";
+}
+
+function asanaBulkFailureNextStep(code: string): string {
+  if (code === "ASANA_NOT_FOUND" || code === "ASANA_TASK_NOT_FOUND") {
+    return "Reload the task list before retrying.";
+  }
+  if (
+    code === "ASANA_SCOPE_MISSING" ||
+    code === "ASANA_REAUTH_REQUIRED" ||
+    code === "ASANA_AUTH_EXPIRED"
+  ) {
+    return "Reconnect Asana, then try again.";
+  }
+  if (code === "ASANA_RATE_LIMITED") {
+    return "Wait a minute, then try again.";
+  }
+  if (code === "ASANA_NETWORK_ERROR" || code === "ASANA_UNAVAILABLE") {
+    return "Try again shortly.";
+  }
+  return "Reload the task list if this keeps happening.";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
 function defaultToolFailureMessage(toolName: ToolName): string {
   if (toolName.startsWith("asana_")) {
-    return "I couldn't complete that Asana request right now. Try again in a moment.";
+    return "I couldn't complete that Asana request (ASANA_UNKNOWN_ERROR). I logged the operation and error details; try again after reloading the task list.";
   }
   if (toolName.startsWith("calendar_")) {
     return "I couldn't complete that calendar request right now. Try again in a moment.";

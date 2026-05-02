@@ -368,6 +368,48 @@ describe("asana service", () => {
     });
   });
 
+  it("retries transient Asana server failures before succeeding", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ errors: [{ message: "temporary" }] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [{ gid: "1", name: "Alpha" }] })
+      });
+
+    const workspaces = await new AsanaService("token").listWorkspaces();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(workspaces).toEqual([{ gid: "1", name: "Alpha", isOrganization: undefined }]);
+  });
+
+  it("maps repeated server failures to unavailable diagnostics", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ errors: [{ message: "unavailable" }] })
+    });
+
+    await expect(new AsanaService("token").listWorkspaces()).rejects.toMatchObject({
+      code: "ASANA_UNAVAILABLE",
+      userMessage: expect.stringContaining("ASANA_UNAVAILABLE")
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("maps repeated network failures to network diagnostics", async () => {
+    fetchMock.mockRejectedValue(new Error("socket closed"));
+
+    await expect(new AsanaService("token").listWorkspaces()).rejects.toMatchObject({
+      code: "ASANA_NETWORK_ERROR",
+      userMessage: expect.stringContaining("ASANA_NETWORK_ERROR")
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("deletes a task after reading its name", async () => {
     fetchMock
       .mockResolvedValueOnce({

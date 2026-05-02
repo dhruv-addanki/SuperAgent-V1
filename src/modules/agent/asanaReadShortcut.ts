@@ -39,6 +39,17 @@ export interface AsanaBulkCompleteClarification {
   projectName?: string;
 }
 
+export interface LastVisibleAsanaTaskList {
+  scopeLabel?: string;
+  tasks: Array<{
+    taskGid: string;
+    name?: string;
+    projectName?: string;
+    dueOn?: string;
+    completed?: boolean;
+  }>;
+}
+
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
   jan: 0,
@@ -72,9 +83,7 @@ const DATE_ONLY_FOLLOW_UP_PATTERN = new RegExp(
   `^(?:(?:what|how)\\s+about\\s+|and\\s+|for\\s+|from\\s+|on\\s+|due\\s+)?(?:before\\s+yesterday|today|tomorrow|yesterday|${MONTH_DAY_REFERENCE_PATTERN}|before\\s+${MONTH_DAY_REFERENCE_PATTERN})$`
 );
 
-export function matchGenericAsanaMyTasksRequest(
-  text: string
-): GenericAsanaTaskTarget | null {
+export function matchGenericAsanaMyTasksRequest(text: string): GenericAsanaTaskTarget | null {
   const normalized = normalize(text);
   if (isLikelyAsanaWriteRequest(normalized)) return null;
   const referencesAsana = /\basana\b/.test(normalized);
@@ -103,6 +112,7 @@ export function matchGenericAsanaMyTasksRequest(
 export function matchGenericAsanaOpenTasksRequest(text: string): boolean {
   const normalized = normalize(text);
   if (isLikelyAsanaWriteRequest(normalized)) return false;
+  if (matchAsanaProjectsRequest(text)) return false;
 
   const referencesAsana = /\basana\b/.test(normalized);
   const referencesTasks =
@@ -118,6 +128,114 @@ export function matchGenericAsanaOpenTasksRequest(text: string): boolean {
   if (!asksForOverview) return false;
   if (/\btoday\b|\btomorrow\b|\bdue\b|\bbefore\b/.test(normalized)) return false;
   return referencesAsana || referencesTasks;
+}
+
+export function matchAsanaProjectsRequest(text: string): boolean {
+  const normalized = normalize(text);
+  const asksForOverview =
+    /\bwhat(?:'s|s)?\b/.test(normalized) ||
+    /\bwhich\b/.test(normalized) ||
+    /\bshow\b/.test(normalized) ||
+    /\blist\b/.test(normalized) ||
+    /\bcheck\b/.test(normalized);
+  if (/\btasks?\b/.test(normalized)) return false;
+  return asksForOverview && /\basana\b/.test(normalized) && /\bprojects?\b/.test(normalized);
+}
+
+export function matchListedAsanaBulkCompleteRequest(text: string): boolean {
+  const normalized = normalize(text);
+  const asksToComplete =
+    /\bcomplete\b/.test(normalized) ||
+    /\bmark\b.*\b(?:complete|done|finished)\b/.test(normalized) ||
+    /\bmark\b.*\bas complete\b/.test(normalized);
+  const referencesListedTasks =
+    /\bthose\b/.test(normalized) ||
+    /\bthese\b/.test(normalized) ||
+    /\bthem\b/.test(normalized) ||
+    /\blisted\b/.test(normalized) ||
+    /\bthe list\b/.test(normalized) ||
+    /\bthat list\b/.test(normalized);
+  return asksToComplete && referencesListedTasks && /\btasks?\b/.test(normalized);
+}
+
+export function matchAsanaBulkRetryRequest(
+  text: string,
+  memoryEntries: PromptMemoryEntry[]
+): boolean {
+  const normalized = normalize(text);
+  if (!/\b(?:try again|retry|rerun|run it again)\b/.test(normalized)) return false;
+  return Boolean(memoryEntries.find((entry) => entry.key === "last_failed_asana_bulk_update"));
+}
+
+export function lastVisibleAsanaTaskList(
+  memoryEntries: PromptMemoryEntry[]
+): LastVisibleAsanaTaskList | null {
+  const entry = memoryEntries.find((item) => item.key === "last_visible_asana_task_list");
+  if (!entry || !entry.value || typeof entry.value !== "object") return null;
+  const record = entry.value as { tasks?: unknown; scopeLabel?: unknown };
+  if (!Array.isArray(record.tasks)) return null;
+
+  const tasks: LastVisibleAsanaTaskList["tasks"] = [];
+  for (const task of record.tasks) {
+    if (!task || typeof task !== "object") continue;
+    const value = task as {
+      taskGid?: unknown;
+      name?: unknown;
+      projectName?: unknown;
+      dueOn?: unknown;
+      completed?: unknown;
+    };
+    if (typeof value.taskGid !== "string") continue;
+    tasks.push({
+      taskGid: value.taskGid,
+      ...(typeof value.name === "string" ? { name: value.name } : {}),
+      ...(typeof value.projectName === "string" ? { projectName: value.projectName } : {}),
+      ...(typeof value.dueOn === "string" ? { dueOn: value.dueOn } : {}),
+      ...(typeof value.completed === "boolean" ? { completed: value.completed } : {})
+    });
+  }
+
+  return {
+    scopeLabel: typeof record.scopeLabel === "string" ? record.scopeLabel : undefined,
+    tasks
+  };
+}
+
+export function lastFailedAsanaBulkRetryTaskList(
+  memoryEntries: PromptMemoryEntry[]
+): LastVisibleAsanaTaskList | null {
+  const entry = memoryEntries.find((item) => item.key === "last_failed_asana_bulk_update");
+  if (!entry || !entry.value || typeof entry.value !== "object") return null;
+  const record = entry.value as { retryableTasks?: unknown; summary?: unknown };
+  if (!Array.isArray(record.retryableTasks)) {
+    return {
+      scopeLabel: typeof record.summary === "string" ? record.summary : undefined,
+      tasks: []
+    };
+  }
+
+  const tasks: LastVisibleAsanaTaskList["tasks"] = [];
+  for (const task of record.retryableTasks) {
+    if (!task || typeof task !== "object") continue;
+    const value = task as {
+      taskGid?: unknown;
+      name?: unknown;
+      projectName?: unknown;
+      dueOn?: unknown;
+    };
+    if (typeof value.taskGid !== "string") continue;
+    tasks.push({
+      taskGid: value.taskGid,
+      ...(typeof value.name === "string" ? { name: value.name } : {}),
+      ...(typeof value.projectName === "string" ? { projectName: value.projectName } : {}),
+      ...(typeof value.dueOn === "string" ? { dueOn: value.dueOn } : {})
+    });
+  }
+
+  return {
+    scopeLabel: typeof record.summary === "string" ? record.summary : undefined,
+    tasks
+  };
 }
 
 export function asanaTaskDueDate(
@@ -311,9 +429,7 @@ export function formatLatestAsanaTaskReply(
   }
 
   const timestamp =
-    (input.completed ? task.completedAt : task.modifiedAt) ??
-    task.modifiedAt ??
-    task.createdAt;
+    (input.completed ? task.completedAt : task.modifiedAt) ?? task.modifiedAt ?? task.createdAt;
   const timestampLabel = input.completed
     ? "Completed"
     : task.modifiedAt
@@ -371,8 +487,7 @@ function isLikelyAsanaWriteRequest(normalizedText: string): boolean {
   const completeTask =
     /\b(mark|set)\b[^.?!]*\btasks?\b[^.?!]*\b(complete|done|incomplete|open)\b/.test(
       normalizedText
-    ) ||
-    /\b(complete|finish)\b[^.?!]*\btasks?\b/.test(normalizedText);
+    ) || /\b(complete|finish)\b[^.?!]*\btasks?\b/.test(normalizedText);
 
   return mentionsTask && (createTask || mutateTask || completeTask);
 }
@@ -625,7 +740,9 @@ function singleProjectNameFromTasks(
   tasks: Array<{ taskGid: string; name?: string; projectName?: string }>
 ): string | undefined {
   const names = Array.from(
-    new Set(tasks.map((task) => task.projectName).filter((value): value is string => Boolean(value)))
+    new Set(
+      tasks.map((task) => task.projectName).filter((value): value is string => Boolean(value))
+    )
   );
   return names.length === 1 ? names[0] : undefined;
 }
@@ -645,7 +762,7 @@ function formatTaskLine(task: AsanaTaskSummary): string {
 
 function firstProjectLabel(task: AsanaTaskSummary): string | undefined {
   const projectName = task.projects?.find((project) => project.name)?.name;
-  return projectName ?? (task.workspaceName && !(task.projects?.length) ? "No project" : undefined);
+  return projectName ?? (task.workspaceName && !task.projects?.length ? "No project" : undefined);
 }
 
 function capitalize(value: string): string {

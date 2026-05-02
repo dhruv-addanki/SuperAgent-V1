@@ -3,11 +3,14 @@ import { parseConfirmationIntent } from "./approvalPolicy";
 import type { PromptMemoryEntry } from "./conversationContext";
 import {
   matchAmbiguousAsanaBulkCompleteRequest,
+  matchAsanaBulkRetryRequest,
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
-  matchGenericAsanaMyTasksRequest
+  matchGenericAsanaMyTasksRequest,
+  matchListedAsanaBulkCompleteRequest
 } from "./asanaReadShortcut";
 import {
   matchCalendarAllCalendarsFollowUpRequest,
@@ -52,6 +55,9 @@ export type IntentShortcutCandidate =
   | "ambiguous_asana_bulk_complete"
   | "recent_google_doc_delete"
   | "calendar_overview"
+  | "asana_listed_bulk_complete"
+  | "asana_bulk_retry"
+  | "asana_projects"
   | "asana_today_and_latest_open"
   | "asana_latest_task"
   | "asana_list"
@@ -274,6 +280,14 @@ function detectShortcutCandidate(
     trace.push("shortcut:missing_digest_retry");
     return "missing_digest_retry";
   }
+  if (matchAsanaBulkRetryRequest(text, memoryEntries)) {
+    trace.push("shortcut:asana_bulk_retry");
+    return "asana_bulk_retry";
+  }
+  if (matchListedAsanaBulkCompleteRequest(text)) {
+    trace.push("shortcut:asana_listed_bulk_complete");
+    return "asana_listed_bulk_complete";
+  }
   if (matchAmbiguousAsanaBulkCompleteRequest(text, memoryEntries)) {
     trace.push("shortcut:ambiguous_asana_bulk_complete");
     return "ambiguous_asana_bulk_complete";
@@ -300,6 +314,10 @@ function detectShortcutCandidate(
   if (matchAsanaListShortcut(text, history, memoryEntries, timezone)) {
     trace.push("shortcut:asana_list");
     return "asana_list";
+  }
+  if (matchAsanaProjectsRequest(text)) {
+    trace.push("shortcut:asana_projects");
+    return "asana_projects";
   }
 
   const projectName = extractAsanaProjectTaskName(text);
@@ -343,6 +361,9 @@ function applyShortcutDomainHints(
     shortcut === "asana_today_and_latest_open" ||
     shortcut === "asana_latest_task" ||
     shortcut === "asana_list" ||
+    shortcut === "asana_listed_bulk_complete" ||
+    shortcut === "asana_bulk_retry" ||
+    shortcut === "asana_projects" ||
     shortcut === "asana_project_tasks" ||
     shortcut === "asana_open_tasks" ||
     shortcut === "asana_my_tasks" ||
@@ -387,7 +408,13 @@ function detectAction(input: {
   }
   if (input.shortcutCandidate === "one_time_morning_digest") return "run_once";
   if (input.shortcutCandidate === "missing_digest_retry") return "retry";
-  if (input.shortcutCandidate === "ambiguous_asana_bulk_complete") return "update";
+  if (
+    input.shortcutCandidate === "ambiguous_asana_bulk_complete" ||
+    input.shortcutCandidate === "asana_listed_bulk_complete" ||
+    input.shortcutCandidate === "asana_bulk_retry"
+  ) {
+    return "update";
+  }
   if (input.shortcutCandidate === "recent_google_doc_delete") return "delete";
   if (input.shortcutCandidate) return "read";
   if (input.domains.includes("setup")) return "setup";

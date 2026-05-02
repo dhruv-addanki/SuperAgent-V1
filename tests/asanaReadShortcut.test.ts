@@ -9,8 +9,10 @@ import {
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
-  matchGenericAsanaMyTasksRequest
+  matchGenericAsanaMyTasksRequest,
+  matchListedAsanaBulkCompleteRequest
 } from "../src/modules/agent/asanaReadShortcut";
 
 describe("asana read shortcut", () => {
@@ -24,6 +26,7 @@ describe("asana read shortcut", () => {
     expect(matchGenericAsanaOpenTasksRequest("check my asana")).toBe(true);
     expect(matchGenericAsanaOpenTasksRequest("check all asana tasks")).toBe(true);
     expect(matchGenericAsanaOpenTasksRequest("create a task saying test 1 due today")).toBe(false);
+    expect(matchGenericAsanaOpenTasksRequest("what projects are in Asana right now")).toBe(false);
     expect(matchGenericAsanaMyTasksRequest("create a task saying test 1 due today")).toBeNull();
     expect(
       matchAsanaListShortcut(
@@ -34,6 +37,15 @@ describe("asana read shortcut", () => {
         new Date("2026-04-23T15:00:00.000Z")
       )
     ).toBeNull();
+  });
+
+  it("matches Asana project lists and listed-task completion", () => {
+    expect(matchAsanaProjectsRequest("what projects are in Asana right now")).toBe(true);
+    expect(matchAsanaProjectsRequest("show Asana project tasks")).toBe(false);
+    expect(
+      matchListedAsanaBulkCompleteRequest("can you mark all those tasks listed as complete")
+    ).toBe(true);
+    expect(matchListedAsanaBulkCompleteRequest("complete all tasks")).toBe(false);
   });
 
   it("computes due dates in the user's timezone", () => {

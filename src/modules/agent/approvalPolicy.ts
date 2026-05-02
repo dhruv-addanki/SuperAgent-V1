@@ -143,13 +143,14 @@ export function getApprovalDecision(
             (taskGid): taskGid is string => typeof taskGid === "string"
           ) as string[])
         : [];
+    const preview = formatAsanaBulkTaskPreview(input, taskGids);
 
     return {
       requiresApproval: true,
       confirmationKeyword: "CONFIRM",
       confirmationMessage: [
         `Complete ${taskGids.length} Asana task${taskGids.length === 1 ? "" : "s"}?`,
-        ...taskGids.slice(0, 10).map((taskGid) => `- ${taskGid}`),
+        ...preview.slice(0, 10),
         taskGids.length > 10 ? `...and ${taskGids.length - 10} more` : undefined,
         "Reply yes to confirm, or cancel."
       ]
@@ -160,6 +161,41 @@ export function getApprovalDecision(
   }
 
   return { requiresApproval: false };
+}
+
+function formatAsanaBulkTaskPreview(input: unknown, taskGids: string[]): string[] {
+  const previewItems =
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as { taskPreview?: unknown }).taskPreview)
+      ? (input as { taskPreview: unknown[] }).taskPreview
+      : [];
+  const previewByGid = new Map<string, { name?: string; projectName?: string; dueOn?: string }>();
+
+  for (const item of previewItems) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as {
+      taskGid?: unknown;
+      name?: unknown;
+      projectName?: unknown;
+      dueOn?: unknown;
+    };
+    if (typeof record.taskGid !== "string") continue;
+    previewByGid.set(record.taskGid, {
+      name: typeof record.name === "string" ? record.name : undefined,
+      projectName: typeof record.projectName === "string" ? record.projectName : undefined,
+      dueOn: typeof record.dueOn === "string" ? record.dueOn : undefined
+    });
+  }
+
+  return taskGids.map((taskGid, index) => {
+    const preview = previewByGid.get(taskGid);
+    const name = preview?.name ?? `Task ${index + 1}`;
+    const details = [preview?.projectName, preview?.dueOn ? `due ${preview.dueOn}` : undefined]
+      .filter(Boolean)
+      .join(" • ");
+    return `- ${name}${details ? ` (${details})` : ""}`;
+  });
 }
 
 export async function createPendingAction(

@@ -2427,6 +2427,238 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("stages listed Asana task completion from backend memory", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        approvalRequired: true,
+        userMessage: "Complete 2 Asana tasks?\n- test 1\n- test 2\nReply yes to confirm, or cancel."
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          {
+            role: "assistant",
+            content: "Here are the open Asana tasks:\n\n1. test 1\n2. test 2"
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "last_visible_asana_task_list",
+            value: {
+              scopeLabel: "My Tasks",
+              tasks: [
+                { taskGid: "task_1", name: "test 1", projectName: "Scanis" },
+                { taskGid: "task_2", name: "test 2", dueOn: "2026-05-25" }
+              ]
+            },
+            updatedAt: new Date("2026-05-01T15:00:00.000Z")
+          }
+        ]),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "can you mark all those tasks listed as complete"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_bulk_update_tasks",
+      {
+        taskGids: ["task_1", "task_2"],
+        completed: true,
+        source: "recent_list",
+        taskPreview: [
+          {
+            taskGid: "task_1",
+            name: "test 1",
+            projectName: "Scanis",
+            dueOn: undefined,
+            completed: undefined
+          },
+          {
+            taskGid: "task_2",
+            name: "test 2",
+            projectName: undefined,
+            dueOn: "2026-05-25",
+            completed: undefined
+          }
+        ]
+      },
+      expect.objectContaining({
+        latestUserMessage: "can you mark all those tasks listed as complete"
+      })
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Complete 2 Asana tasks")
+    );
+  });
+
+  it("routes Asana project-list requests to projects, not My Tasks", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [
+          { gid: "project_1", name: "Scanis", teamName: "Growth" },
+          { gid: "project_2", name: "Content" }
+        ]
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "what projects are in asana right now"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_projects",
+      {},
+      expect.objectContaining({
+        latestUserMessage: "what projects are in asana right now"
+      })
+    );
+    expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Scanis")
+    );
+  });
+
+  it("does not complete listed Asana tasks without a recent backend list", async () => {
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "complete the listed tasks"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "I don't have a recent Asana task list to apply that to. Ask me to show the tasks first."
+    );
+  });
+
   it("short-circuits Asana date-history requests across all projects", async () => {
     const executeToolCallSpy = vi
       .spyOn(ToolExecutor.prototype, "executeToolCall")

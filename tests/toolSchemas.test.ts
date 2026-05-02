@@ -128,7 +128,9 @@ describe("tool schemas", () => {
     expect(
       toolInputSchemas.asana_bulk_update_tasks.parse({
         taskGids: ["task_1"],
-        completed: true
+        completed: true,
+        source: "recent_list",
+        taskPreview: [{ taskGid: "task_1", name: "Test task", projectName: "Scanis" }]
       }).completed
     ).toBe(true);
 

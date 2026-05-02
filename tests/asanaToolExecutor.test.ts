@@ -29,6 +29,7 @@ vi.mock("../src/modules/asana/asanaService", () => ({
 }));
 
 import { ToolExecutor } from "../src/modules/agent/toolExecutor";
+import { UserFacingError } from "../src/lib/errors";
 
 function makePrisma(initialMemory: Record<string, unknown> = {}) {
   const memory = new Map(
@@ -233,7 +234,8 @@ describe("tool executor Asana flows", () => {
     expect(prisma.memoryEntry.upsert.mock.calls.map((call: any[]) => call[0].create.key)).toEqual([
       "recent_asana_tasks",
       "recent_asana_projects",
-      "recent_asana_workspace"
+      "recent_asana_workspace",
+      "last_visible_asana_task_list"
     ]);
   });
 
@@ -494,15 +496,103 @@ describe("tool executor Asana flows", () => {
 
     const result = await executor.executeToolCall(
       "asana_bulk_update_tasks",
-      { taskGids: ["task_1", "task_2"], completed: true },
+      {
+        taskGids: ["task_1", "task_2"],
+        completed: true,
+        source: "recent_list",
+        taskPreview: [
+          { taskGid: "task_1", name: "First task", projectName: "Scanis" },
+          { taskGid: "task_2", name: "Second task", dueOn: "2026-05-25" }
+        ]
+      },
       makeContext("Complete all listed tasks")
     );
 
     expect(result.ok).toBe(true);
     expect(result.approvalRequired).toBe(true);
     expect(result.userMessage).toContain("Complete 2 Asana tasks");
+    expect(result.userMessage).toContain("First task");
+    expect(result.userMessage).toContain("Second task");
+    expect(result.userMessage).not.toContain("- task_1");
     expect(prisma.pendingAction.create).toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("executes confirmed bulk completion for 20 tasks", async () => {
+    const executor = makeExecutor();
+    const taskGids = Array.from({ length: 20 }, (_, index) => `task_${index + 1}`);
+    updateTaskMock.mockImplementation(async ({ taskGid }) => ({
+      gid: taskGid,
+      name: `Task ${taskGid}`,
+      completed: true
+    }));
+
+    const result = await executor.executeToolCall(
+      "asana_bulk_update_tasks",
+      { taskGids, completed: true, source: "recent_list" },
+      makeContext("yes"),
+      { force: true }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(updateTaskMock).toHaveBeenCalledTimes(20);
+    expect(result.userMessage).toBe("Completed 20 Asana tasks.");
+  });
+
+  it("retries transient bulk completion failures", async () => {
+    const executor = makeExecutor();
+    updateTaskMock
+      .mockRejectedValueOnce(
+        new UserFacingError(
+          "Asana rate limited",
+          "ASANA_RATE_LIMITED",
+          "Asana is rate limiting requests right now."
+        )
+      )
+      .mockResolvedValueOnce({ gid: "task_1", name: "Task 1", completed: true });
+
+    const result = await executor.executeToolCall(
+      "asana_bulk_update_tasks",
+      { taskGids: ["task_1"], completed: true },
+      makeContext("yes"),
+      { force: true }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(updateTaskMock).toHaveBeenCalledTimes(2);
+    expect(result.userMessage).toBe("Completed 1 Asana task.");
+  });
+
+  it("does not retry permanent bulk completion failures and stores diagnostics", async () => {
+    const prisma = makePrisma();
+    const executor = makeExecutor(prisma);
+    updateTaskMock.mockRejectedValue(
+      new UserFacingError(
+        "Asana resource not found",
+        "ASANA_NOT_FOUND",
+        "I couldn't find that Asana task."
+      )
+    );
+
+    const result = await executor.executeToolCall(
+      "asana_bulk_update_tasks",
+      {
+        taskGids: ["task_1"],
+        completed: true,
+        taskPreview: [{ taskGid: "task_1", name: "Missing task" }]
+      },
+      makeContext("yes"),
+      { force: true }
+    );
+
+    expect(result.ok).toBe(false);
+    expect(updateTaskMock).toHaveBeenCalledTimes(1);
+    expect(result.userMessage).toContain("Asana could not find those task IDs");
+    expect(prisma.memoryEntry.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "last_failed_asana_bulk_update" } }
+      })
+    );
   });
 
   it("executes confirmed bulk completion sequentially", async () => {

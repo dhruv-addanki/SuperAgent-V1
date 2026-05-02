@@ -12,6 +12,9 @@ import type {
 const ASANA_API_BASE_URL = "https://app.asana.com/api/1.0";
 const MAX_COLLECTION_PAGES = 10;
 const MAX_COLLECTION_ITEMS = 500;
+const ASANA_REQUEST_TIMEOUT_MS = 10_000;
+const ASANA_REQUEST_ATTEMPTS = 3;
+const ASANA_RETRY_DELAY_MS = 25;
 const COMPLETED_SINCE_ALL = "1970-01-01T00:00:00.000Z";
 const TASK_FIELDS = [
   "gid",
@@ -691,8 +694,9 @@ export class AsanaService {
       }
     }
 
-    const response = await fetch(url, {
-      method: input.method ?? "GET",
+    const method = input.method ?? "GET";
+    const response = await this.fetchWithRetry(url, {
+      method,
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
         Accept: "application/json",
@@ -717,12 +721,56 @@ export class AsanaService {
     };
   }
 
+  private async fetchWithRetry(url: URL, init: RequestInit): Promise<Response> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= ASANA_REQUEST_ATTEMPTS; attempt += 1) {
+      const controller = new globalThis.AbortController();
+      const timeout = globalThis.setTimeout(() => controller.abort(), ASANA_REQUEST_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, {
+          ...init,
+          signal: controller.signal
+        });
+        globalThis.clearTimeout(timeout);
+
+        if (!isRetryableAsanaStatus(response.status) || attempt >= ASANA_REQUEST_ATTEMPTS) {
+          return response;
+        }
+
+        await delay(ASANA_RETRY_DELAY_MS * attempt);
+      } catch (error) {
+        globalThis.clearTimeout(timeout);
+        lastError = error;
+        if (attempt >= ASANA_REQUEST_ATTEMPTS) {
+          const mapped = new UserFacingError(
+            "Asana network error",
+            "ASANA_NETWORK_ERROR",
+            "I couldn't reach Asana (ASANA_NETWORK_ERROR). Retried the request and it still failed; try again shortly."
+          );
+          (mapped as Error & { cause?: unknown }).cause = error;
+          throw mapped;
+        }
+        await delay(ASANA_RETRY_DELAY_MS * attempt);
+      }
+    }
+
+    const mapped = new UserFacingError(
+      "Asana network error",
+      "ASANA_NETWORK_ERROR",
+      "I couldn't reach Asana (ASANA_NETWORK_ERROR). Retried the request and it still failed; try again shortly."
+    );
+    (mapped as Error & { cause?: unknown }).cause = lastError;
+    throw mapped;
+  }
+
   private mapError(status: number, path: string, detail?: string): Error {
     if (status === 400 && path.includes("/users/me/user_task_list")) {
       return new UserFacingError(
         "Asana My Tasks unavailable",
         "ASANA_MY_TASKS_UNAVAILABLE",
-        "I couldn't read Asana My Tasks for that workspace. Ask me to check a project instead."
+        "I couldn't read Asana My Tasks for that workspace (ASANA_MY_TASKS_UNAVAILABLE). Ask me to check a project instead."
       );
     }
 
@@ -731,8 +779,8 @@ export class AsanaService {
         "Asana rejected request",
         "ASANA_BAD_REQUEST",
         detail
-          ? `Asana rejected that request: ${detail}`
-          : "Asana rejected that request. Try a simpler project, task, or workspace request."
+          ? `Asana rejected that request (ASANA_BAD_REQUEST): ${detail}`
+          : "Asana rejected that request (ASANA_BAD_REQUEST). Try a simpler project, task, or workspace request."
       );
     }
 
@@ -740,7 +788,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana auth expired",
         "ASANA_AUTH_EXPIRED",
-        "Reconnect your Asana account and try again."
+        "Reconnect your Asana account (ASANA_AUTH_EXPIRED), then try again."
       );
     }
 
@@ -748,7 +796,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana premium search required",
         "ASANA_SEARCH_PREMIUM_REQUIRED",
-        "Asana task search is only available on premium workspaces. Ask me to check My Tasks or a specific project instead."
+        "Asana task search is only available on premium workspaces (ASANA_SEARCH_PREMIUM_REQUIRED). Ask me to check My Tasks or a specific project instead."
       );
     }
 
@@ -756,7 +804,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana scope missing",
         "ASANA_SCOPE_MISSING",
-        "Reconnect your Asana account to grant the missing access and try again."
+        "Reconnect your Asana account to grant the missing access (ASANA_SCOPE_MISSING), then try again."
       );
     }
 
@@ -764,7 +812,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana permission denied",
         "ASANA_FORBIDDEN",
-        "Your Asana account does not have access to that workspace, project, team, or task."
+        "Your Asana account does not have access to that workspace, project, team, or task (ASANA_FORBIDDEN)."
       );
     }
 
@@ -772,7 +820,7 @@ export class AsanaService {
       return new UserFacingError(
         "Asana resource not found",
         "ASANA_NOT_FOUND",
-        "I couldn't find that Asana task, project, team, or workspace."
+        "I couldn't find that Asana task, project, team, or workspace (ASANA_NOT_FOUND). Reload the list before retrying."
       );
     }
 
@@ -780,10 +828,26 @@ export class AsanaService {
       return new UserFacingError(
         "Asana rate limited",
         "ASANA_RATE_LIMITED",
-        "Asana is rate limiting requests right now. Please try again in a minute."
+        "Asana is rate limiting requests right now (ASANA_RATE_LIMITED). Retried and still rate limited; try again in a minute."
+      );
+    }
+
+    if (status >= 500) {
+      return new UserFacingError(
+        "Asana unavailable",
+        "ASANA_UNAVAILABLE",
+        "Asana is temporarily unavailable (ASANA_UNAVAILABLE). Retried and still failed; try again shortly."
       );
     }
 
     return new ExternalApiError("asana", "I couldn't reach Asana right now.", detail);
   }
+}
+
+function isRetryableAsanaStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }

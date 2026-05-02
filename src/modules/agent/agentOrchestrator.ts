@@ -56,12 +56,17 @@ import {
   formatAsanaTodayAndLatestOpenReply,
   formatLatestAsanaTaskReply,
   formatScopedAsanaTaskList,
+  lastFailedAsanaBulkRetryTaskList,
+  lastVisibleAsanaTaskList,
   matchAmbiguousAsanaBulkCompleteRequest,
+  matchAsanaBulkRetryRequest,
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
-  matchGenericAsanaMyTasksRequest
+  matchGenericAsanaMyTasksRequest,
+  matchListedAsanaBulkCompleteRequest
 } from "./asanaReadShortcut";
 import {
   calendarOverviewWindow,
@@ -69,7 +74,7 @@ import {
   matchCalendarAllCalendarsFollowUpRequest,
   matchGenericCalendarOverviewRequest
 } from "./calendarReadShortcut";
-import type { AsanaTaskSummary } from "../asana/asanaTypes";
+import type { AsanaProjectSummary, AsanaTaskSummary } from "../asana/asanaTypes";
 import type { CalendarEventSummary, GmailThreadSummary } from "../google/googleTypes";
 
 export interface InboundWhatsAppTextInput {
@@ -314,6 +319,76 @@ export class AgentOrchestrator {
         if (handled) return;
       }
 
+      const asanaBulkRetry = matchAsanaBulkRetryRequest(preparedInput.text, memoryEntries);
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_bulk_retry" &&
+        asanaBulkRetry
+      ) {
+        const retryList = lastFailedAsanaBulkRetryTaskList(memoryEntries);
+        if (!retryList?.tasks.length) {
+          await replyToUser(
+            retryList?.scopeLabel
+              ? `The last Asana bulk attempt has no retryable task failures. ${retryList.scopeLabel}`
+              : "The last Asana bulk attempt has no retryable task failures. Reload the task list before retrying."
+          );
+          return;
+        }
+
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_bulk_update_tasks",
+          {
+            taskGids: retryList.tasks.map((task) => task.taskGid),
+            completed: true,
+            source: "recent_list",
+            taskPreview: retryList.tasks
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+        await replyToUser(result.userMessage ?? "I staged the retry for those Asana tasks.");
+        return;
+      }
+
+      const listedAsanaBulkComplete = matchListedAsanaBulkCompleteRequest(preparedInput.text);
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_listed_bulk_complete" &&
+        listedAsanaBulkComplete
+      ) {
+        const recentList = lastVisibleAsanaTaskList(memoryEntries);
+        if (!recentList) {
+          await replyToUser(
+            "I don't have a recent Asana task list to apply that to. Ask me to show the tasks first."
+          );
+          return;
+        }
+        if (!recentList.tasks.length) {
+          await replyToUser("The last Asana task list I showed had no tasks to complete.");
+          return;
+        }
+
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_bulk_update_tasks",
+          {
+            taskGids: recentList.tasks.map((task) => task.taskGid),
+            completed: true,
+            source: "recent_list",
+            taskPreview: recentList.tasks
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+        await replyToUser(result.userMessage ?? "I staged completion for the listed Asana tasks.");
+        return;
+      }
+
       const oneTimeAutomationDigest = matchOneTimeAutomationDigestRequest(
         preparedInput.text,
         history
@@ -477,6 +552,34 @@ export class AgentOrchestrator {
             window.label
           )
         );
+        return;
+      }
+
+      const asanaProjectsRequest = matchAsanaProjectsRequest(preparedInput.text);
+      if (
+        shouldUseTextShortcuts &&
+        intentRoute.shortcutCandidate === "asana_projects" &&
+        asanaProjectsRequest
+      ) {
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_list_projects",
+          {},
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+
+        if (!result.ok) {
+          await replyToUser(
+            result.userMessage ??
+              "I couldn't list your Asana projects right now. Try again in a moment."
+          );
+          return;
+        }
+
+        await replyToUser(formatAsanaProjectsReply(result.data as AsanaProjectSummary[]));
         return;
       }
 
@@ -1451,6 +1554,21 @@ function buildImageInputItem(text: string, imageDataUrl: string): ResponseInputI
       }
     ]
   };
+}
+
+function formatAsanaProjectsReply(projects: AsanaProjectSummary[]): string {
+  if (!projects.length) return "I don't see any Asana projects in that workspace.";
+
+  return [
+    `Here are the Asana projects I can see:`,
+    "",
+    ...projects.slice(0, 25).map((project, index) => {
+      const details = [project.teamName, project.archived ? "archived" : undefined]
+        .filter(Boolean)
+        .join(" • ");
+      return `${index + 1}. ${project.name}${details ? ` (${details})` : ""}`;
+    })
+  ].join("\n");
 }
 
 function inputWithPreparedCurrentTurn(

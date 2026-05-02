@@ -63,6 +63,22 @@ describe("intent router", () => {
     });
   });
 
+  it("routes Asana project-list and listed-task completion shortcuts", () => {
+    expect(classifyIntentRoute({ text: "what projects are in Asana right now" })).toMatchObject({
+      domains: ["asana"],
+      action: "read",
+      shortcutCandidate: "asana_projects"
+    });
+
+    expect(
+      classifyIntentRoute({ text: "can you mark all those tasks listed as complete" })
+    ).toMatchObject({
+      domains: ["asana"],
+      action: "update",
+      shortcutCandidate: "asana_listed_bulk_complete"
+    });
+  });
+
   it("routes email send requests as Gmail drafts", () => {
     const route = classifyIntentRoute({ text: "send an email to Brad" });
 
