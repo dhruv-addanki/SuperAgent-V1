@@ -201,7 +201,13 @@ export class AutomationScheduler {
       ),
       input: [{ role: "user", content: automationInput }],
       executeTool: async (toolName, toolInput) => {
-        return this.executeReadOnlyAutomationTool(automation, user, conversation, toolName, toolInput);
+        return this.executeReadOnlyAutomationTool(
+          automation,
+          user,
+          conversation,
+          toolName,
+          toolInput
+        );
       },
       maxToolRounds: env.MAX_TOOL_ROUNDS,
       continueAfterToolMessages: true
@@ -413,9 +419,10 @@ export class AutomationScheduler {
 export function formatAutomationDigest(name: string, body: string): string {
   const compactBody =
     capAutomationDigestLines(
-      stripEmptyDigestSections(stripWeakDigestTail(stripRedundantDigestHeading(body.trim())))
-    ) ||
-    "No summary was produced.";
+      stripEmptyDigestSections(
+        normalizeDigestSectionLabels(stripWeakDigestTail(stripRedundantDigestHeading(body.trim())))
+      )
+    ) || "No summary was produced.";
   return normalizeAssistantMessageForUser(`${name}\n\n${compactBody}`);
 }
 
@@ -427,20 +434,22 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
     "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
     "- If structured conversation context conflicts with preloaded read-only data, trust the preloaded data for this run.",
-    "- Write the digest as a compact command center for starting the day.",
-    "- Target 10 to 14 WhatsApp-friendly lines. You may go slightly longer for real conflicts or source failures.",
-    "- Use these section labels when relevant: At a glance, Schedule, Focus plan, Watchouts, You can ask me to.",
-    "- Never output an empty section label. If there are no watchouts, omit Watchouts. If there are no exact suggested commands, omit You can ask me to.",
+    "- Write the digest as a compact command center for starting the day, with the practical structure of a morning briefing.",
+    "- Target 12 to 18 WhatsApp-friendly lines. You may go slightly longer for real conflicts, important email, or source failures.",
+    "- Use these section labels when relevant: At a glance, Schedule, Email, Asana, Focus plan, Action items, Further prompts.",
+    "- Never output Watchouts. Convert risks, conflicts, source failures, and time-sensitive items into concrete Action items.",
+    "- Never output an empty section label. If there are no concrete actions, omit Action items. If there are no exact suggested commands, omit Further prompts.",
     "- Start with At a glance: one line summarizing the day, urgency, conflicts, and top focus.",
     "- Keep Schedule short. Include key events and conflicts, not every detail when the day is busy.",
-    "- Keep Focus plan realistic. Prefer 2 or 3 time blocks or priorities.",
-    "- Use Watchouts for calendar overlaps, time-sensitive email, missing source data, or risky assumptions.",
-    "- End with You can ask me to only when useful, with 1 to 3 exact reply commands in quotes.",
-    "- If you include You can ask me to, it must contain at least one quoted command on the following lines.",
-    "- Suggested commands must be actions the user can send after the digest, such as \"Move office hours to another slot\", \"Draft a reply to the Okta email\", or \"Create a calendar block for the Chase call\".",
+    "- Use Email for urgent or important threads first, then newsletters/promos only as a compact rollup when useful.",
+    "- Use Asana for My Tasks priorities and stale/overdue task clusters. Do not treat stale due dates as priority by themselves.",
+    "- Keep Focus plan realistic and integrated across calendar, email, and Asana. Prefer 2 or 3 time blocks or priorities.",
+    "- Use Action items for concrete next actions the user should take today. Include source-retry actions here if Gmail, Calendar, or Asana failed.",
+    "- End with Further prompts only when useful, with 1 to 3 exact reply commands in quotes.",
+    "- If you include Further prompts, it must contain at least one quoted command on the following lines.",
+    '- Suggested commands must be actions the user can send after the digest, such as "Move office hours to another slot", "Draft a reply to the Okta email", or "Create a calendar block for the Chase call".',
     "- Scheduled runs stay read-only. Never claim you already performed a suggested follow-up action.",
-    "- Avoid overconfident priority claims. Prefer wording like \"I'd prioritize\" or \"Good candidates\".",
-    "- If a requested source is unavailable, include that briefly in Watchouts without drowning out successful sections.",
+    '- Avoid overconfident priority claims. Prefer wording like "I\'d prioritize" or "Good candidates".',
     "- For Asana planning based on the user's own work, use asana_list_my_tasks. Do not call asana_list_project_tasks unless you have a real projectGid from recent context or asana_list_projects."
   ].join("\n");
 }
@@ -473,7 +482,8 @@ function formatGmailSnapshot(data: unknown): string {
       date?: unknown;
       snippet?: unknown;
     };
-    const subject = typeof item.subject === "string" && item.subject ? item.subject : "(No subject)";
+    const subject =
+      typeof item.subject === "string" && item.subject ? item.subject : "(No subject)";
     const from = typeof item.from === "string" && item.from ? ` from ${item.from}` : "";
     const date = typeof item.date === "string" && item.date ? ` at ${item.date}` : "";
     const snippet = typeof item.snippet === "string" && item.snippet ? `: ${item.snippet}` : "";
@@ -529,9 +539,7 @@ function summarizeAutomationToolInput(input: unknown): Record<string, unknown> {
   ];
 
   return Object.fromEntries(
-    safeKeys
-      .filter((key) => inputObject[key] !== undefined)
-      .map((key) => [key, inputObject[key]])
+    safeKeys.filter((key) => inputObject[key] !== undefined).map((key) => [key, inputObject[key]])
   );
 }
 
@@ -553,6 +561,18 @@ function stripWeakDigestTail(body: string): string {
     .trim();
 }
 
+function normalizeDigestSectionLabels(body: string): string {
+  return body
+    .split("\n")
+    .map((line) => {
+      const section = digestSectionName(line);
+      if (section === "watchouts") return replaceDigestHeadingName(line, "Action items");
+      if (section === "you can ask me to") return replaceDigestHeadingName(line, "Further prompts");
+      return line;
+    })
+    .join("\n");
+}
+
 function stripEmptyDigestSections(body: string): string {
   const lines = body.split("\n");
   const kept: string[] = [];
@@ -565,7 +585,10 @@ function stripEmptyDigestSections(body: string): string {
     kept.push(line);
   }
 
-  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function isDigestSectionHeading(line: string): boolean {
@@ -591,9 +614,19 @@ function digestSectionName(line: string): string | null {
     .trim()
     .toLowerCase();
 
-  return /^(at a glance|schedule|focus plan|watchouts|you can ask me to)$/.test(normalized)
+  return /^(at a glance|schedule|email|asana|focus plan|action items|further prompts|watchouts|you can ask me to)$/.test(
+    normalized
+  )
     ? normalized
     : null;
+}
+
+function replaceDigestHeadingName(line: string, nextName: string): string {
+  const trimmed = line.trim();
+  const hasMarkdownBold = /^\*.*\*:?\s*$/.test(trimmed);
+  const hasColon = /:\s*$/.test(trimmed);
+  if (hasMarkdownBold) return `*${nextName}:*`;
+  return `${nextName}${hasColon ? ":" : ""}`;
 }
 
 function capAutomationDigestLines(body: string): string {
@@ -613,7 +646,9 @@ function capAutomationDigestLines(body: string): string {
     if (isHighValueDigestLine(lines[index] ?? "")) selected.add(index);
   }
 
-  const actionSectionIndex = lines.findIndex((line) => /^you can ask me to:?$/i.test(line.trim()));
+  const actionSectionIndex = lines.findIndex((line) =>
+    /^(?:you can ask me to|further prompts):?$/i.test(line.trim())
+  );
   if (actionSectionIndex >= 0) {
     for (
       let index = actionSectionIndex;
@@ -632,7 +667,7 @@ function capAutomationDigestLines(body: string): string {
 }
 
 function isHighValueDigestLine(line: string): boolean {
-  return /\b(conflict|overlap|watchout|watchouts|unavailable|failed|couldn'?t|urgent|time sensitive|you can ask me to)\b/i.test(
+  return /\b(conflict|overlap|action items|further prompts|unavailable|failed|couldn'?t|urgent|time sensitive|you can ask me to)\b/i.test(
     line
   );
 }

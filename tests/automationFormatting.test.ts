@@ -63,17 +63,19 @@ describe("automation formatting", () => {
         "9:00 to 10:30 has overlapping events.",
         "4:00 to 6:45 has overlapping events.",
         "You can ask me to:",
-        "\"Move office hours to another slot\"",
-        "\"Create a calendar block for the Chase call\"",
+        '"Move office hours to another slot"',
+        '"Create a calendar block for the Chase call"',
         "",
         "If you want, I can retry the missing parts now."
       ].join("\n")
     );
 
     expect(message).toContain("At a glance:");
-    expect(message).toContain("Watchouts:");
-    expect(message).toContain("You can ask me to:");
-    expect(message).toContain("\"Move office hours to another slot\"");
+    expect(message).toContain("Action items:");
+    expect(message).toContain("Further prompts:");
+    expect(message).toContain('"Move office hours to another slot"');
+    expect(message).not.toContain("Watchouts:");
+    expect(message).not.toContain("You can ask me to:");
     expect(message).not.toContain("Morning digest:");
     expect(message).not.toContain("retry the missing parts");
     expect(message).not.toMatch(/[—–]/);
@@ -96,6 +98,7 @@ describe("automation formatting", () => {
 
     expect(message).toContain("Quiet morning.");
     expect(message).not.toContain("You can ask me to:");
+    expect(message).not.toContain("Further prompts:");
     expect(message.split("\n").length).toBeLessThanOrEqual(8);
   });
 
@@ -109,14 +112,15 @@ describe("automation formatting", () => {
         "Calendar unavailable. I couldn't reach Google Calendar right now.",
         "Focus plan:",
         "Handle the due-soon Asana task first.",
-        "You can ask me to:",
-        "\"Run the calendar check again\""
+        "Further prompts:",
+        '"Run the calendar check again"'
       ].join("\n")
     );
 
     expect(message).toContain("Email and Asana loaded");
     expect(message).toContain("Calendar unavailable");
-    expect(message).toContain("\"Run the calendar check again\"");
+    expect(message).toContain("Further prompts:");
+    expect(message).toContain('"Run the calendar check again"');
   });
 
   it("removes empty command-center section labels", () => {
@@ -141,17 +145,22 @@ describe("automation formatting", () => {
     expect(message).toContain("*Focus plan:*");
     expect(message).not.toContain("*Watchouts:*");
     expect(message).not.toContain("*You can ask me to:*");
+    expect(message).not.toContain("*Action items:*");
+    expect(message).not.toContain("*Further prompts:*");
   });
 
   it("documents the command-center scheduled automation prompt rules", () => {
     const instructions = buildScheduledAutomationInstructions("Base prompt");
 
     expect(instructions).toContain("compact command center");
-    expect(instructions).toContain("Target 10 to 14 WhatsApp-friendly lines");
-    expect(instructions).toContain("At a glance, Schedule, Focus plan, Watchouts, You can ask me to");
+    expect(instructions).toContain("Target 12 to 18 WhatsApp-friendly lines");
+    expect(instructions).toContain(
+      "At a glance, Schedule, Email, Asana, Focus plan, Action items, Further prompts"
+    );
+    expect(instructions).toContain("Never output Watchouts");
     expect(instructions).toContain("Never output an empty section label");
     expect(instructions).toContain("1 to 3 exact reply commands");
-    expect(instructions).toContain("at least one quoted command");
+    expect(instructions).toContain("If you include Further prompts");
     expect(instructions).toContain("trust the preloaded data");
     expect(instructions).toContain("Scheduled runs stay read-only");
     expect(instructions).toContain("Good candidates");

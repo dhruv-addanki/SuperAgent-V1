@@ -537,6 +537,18 @@ describe("agent orchestrator", () => {
       "+15555550100",
       expect.stringContaining("Systems Class Ex1 Due")
     );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Action items:")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Further prompts:")
+    );
+    expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Watchouts:")
+    );
     expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
       "+15555550100",
       expect.stringContaining("I couldn't identify that Asana project")

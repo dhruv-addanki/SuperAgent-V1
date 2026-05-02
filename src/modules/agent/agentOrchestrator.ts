@@ -1228,9 +1228,18 @@ function formatOneTimeMorningDigest(input: {
     );
   }
 
-  const watchouts = formatOneTimeDigestWatchouts(input);
-  if (watchouts.length) {
-    sections.push(["Watchouts:", ...watchouts.map((watchout) => `• ${watchout}`)].join("\n"));
+  const actionItems = formatOneTimeDigestActionItems(input);
+  if (actionItems.length) {
+    sections.push(
+      ["Action items:", ...actionItems.map((actionItem) => `• ${actionItem}`)].join("\n")
+    );
+  }
+
+  const furtherPrompts = formatOneTimeDigestFurtherPrompts(input);
+  if (furtherPrompts.length) {
+    sections.push(
+      ["Further prompts:", ...furtherPrompts.map((prompt) => `"${prompt}"`)].join("\n")
+    );
   }
 
   return sections.join("\n\n");
@@ -1256,30 +1265,51 @@ function formatOneTimeDigestGlance(input: {
   return `${parts.join(", ")}.`;
 }
 
-function formatOneTimeDigestWatchouts(input: {
+function formatOneTimeDigestActionItems(input: {
   gmailResult: ToolExecutionResult;
   calendarResult: ToolExecutionResult;
   asanaResult: ToolExecutionResult;
 }): string[] {
   return [
-    input.gmailResult.ok
-      ? null
-      : `Gmail: ${
+    input.gmailResult.ok && countItems(input.gmailResult.data)
+      ? "Scan the important inbox items first, especially security, billing, school, or deadline emails."
+      : null,
+    input.calendarResult.ok
+      ? "Use the calendar gaps to place one Asana work block and one admin cleanup block."
+      : null,
+    input.asanaResult.ok && countItems(input.asanaResult.data)
+      ? "Pick 1 to 2 Asana My Tasks to move forward today; treat stale due dates as triage signals, not automatic priority."
+      : null,
+    !input.gmailResult.ok
+      ? `Retry or reconnect Gmail: ${
           input.gmailResult.userMessage ??
           "I couldn't load recent inbox threads for this one-time digest."
-        }`,
-    input.calendarResult.ok
-      ? null
-      : `Calendar: ${
+        }`
+      : null,
+    !input.calendarResult.ok
+      ? `Retry or reconnect Calendar: ${
           input.calendarResult.userMessage ??
           "I couldn't load today's calendar for this one-time digest."
-        }`,
-    input.asanaResult.ok
-      ? null
-      : `Asana: ${
+        }`
+      : null,
+    !input.asanaResult.ok
+      ? `Retry or reconnect Asana: ${
           input.asanaResult.userMessage ?? "I couldn't load open My Tasks for this one-time digest."
         }`
-  ].filter((watchout): watchout is string => Boolean(watchout));
+      : null
+  ].filter((actionItem): actionItem is string => Boolean(actionItem));
+}
+
+function formatOneTimeDigestFurtherPrompts(input: {
+  gmailResult: ToolExecutionResult;
+  calendarResult: ToolExecutionResult;
+  asanaResult: ToolExecutionResult;
+}): string[] {
+  return [
+    input.gmailResult.ok ? "Summarize just the important emails" : "Retry Gmail for the digest",
+    input.asanaResult.ok ? "Show my top 10 oldest Asana tasks" : "Retry Asana for the digest",
+    input.calendarResult.ok ? "Check my calendar for tomorrow" : "Retry Calendar for the digest"
+  ].slice(0, 3);
 }
 
 function countItems(data: unknown): number {
