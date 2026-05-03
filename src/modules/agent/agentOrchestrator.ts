@@ -66,7 +66,8 @@ import {
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
-  matchListedAsanaBulkCompleteRequest
+  matchListedAsanaBulkCompleteRequest,
+  resolveConcreteAsanaCompletionTarget
 } from "./asanaReadShortcut";
 import {
   calendarOverviewWindow,
@@ -265,6 +266,39 @@ export class AgentOrchestrator {
             : message
         );
       };
+      const runModelFallback = async (promptSuffix = ""): Promise<string> => {
+        const conversationContext = buildConversationContext({
+          latestUserMessage: preparedInput.text,
+          memoryEntries,
+          pendingAction,
+          pendingActionSummary,
+          userProfile: setupStatusProfileLines(setupStatus, user.timezone),
+          intentRoute
+        });
+        const prompt = buildSystemPrompt({
+          timezone: user.timezone,
+          conversationContext: formatConversationContextForPrompt(conversationContext),
+          readOnlyMode: env.READ_ONLY_MODE,
+          nowIso: new Date().toISOString()
+        });
+
+        const result = await runResponseLoop({
+          client: this.responsesClient,
+          model: env.OPENAI_MODEL,
+          instructions: `${prompt}${promptSuffix}`,
+          tools: getAvailableToolDefinitions(),
+          input: inputWithPreparedCurrentTurn(history, preparedInput),
+          executeTool: (toolName, toolInput) =>
+            this.toolExecutor.executeToolCall(toolName, toolInput, {
+              user,
+              conversation,
+              latestUserMessage: preparedInput.text
+            }),
+          maxToolRounds: env.MAX_TOOL_ROUNDS
+        });
+
+        return result.assistantMessage;
+      };
 
       if (integrationLinkRequest) {
         await replyToUser(formatIntegrationLinkForWhatsApp(integrationLinkRequest), {
@@ -278,6 +312,42 @@ export class AgentOrchestrator {
         (firstInteraction && isGreetingOnly(preparedInput.text) && !setupStatus.hasAnyConnected)
       ) {
         await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
+        return;
+      }
+
+      const concreteAsanaCompletion = shouldUseTextShortcuts
+        ? resolveConcreteAsanaCompletionTarget(preparedInput.text, memoryEntries)
+        : null;
+      if (concreteAsanaCompletion && integrationConnected(setupStatus, "asana")) {
+        if (concreteAsanaCompletion.status === "resolved") {
+          const completionMessage = await this.executeConcreteAsanaCompletion({
+            tasks: concreteAsanaCompletion.tasks,
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          });
+          if (hasNonAsanaCompoundWork(intentRoute)) {
+            const remainingMessage = await runModelFallback(
+              `\n\nBackend already completed this Asana request: ${completionMessage}\nDo not call asana_update_task or asana_bulk_update_tasks for that completed target again. Handle only the remaining non-completion parts of the user's message.`
+            );
+            await replyToUser(compactReplySections([completionMessage, remainingMessage]));
+            return;
+          }
+          await replyToUser(completionMessage);
+          return;
+        }
+
+        if (hasNonAsanaCompoundWork(intentRoute)) {
+          const remainingMessage = await runModelFallback(
+            `\n\nThe Asana completion target is not concrete enough to execute: ${concreteAsanaCompletion.message}\nDo not complete Asana tasks. Handle only the remaining non-completion parts of the user's message.`
+          );
+          await replyToUser(
+            compactReplySections([remainingMessage, `Asana: ${concreteAsanaCompletion.message}`])
+          );
+          return;
+        }
+
+        await replyToUser(concreteAsanaCompletion.message);
         return;
       }
 
@@ -892,37 +962,7 @@ export class AgentOrchestrator {
         return;
       }
 
-      const conversationContext = buildConversationContext({
-        latestUserMessage: preparedInput.text,
-        memoryEntries,
-        pendingAction,
-        pendingActionSummary,
-        userProfile: setupStatusProfileLines(setupStatus, user.timezone),
-        intentRoute
-      });
-      const prompt = buildSystemPrompt({
-        timezone: user.timezone,
-        conversationContext: formatConversationContextForPrompt(conversationContext),
-        readOnlyMode: env.READ_ONLY_MODE,
-        nowIso: new Date().toISOString()
-      });
-
-      const result = await runResponseLoop({
-        client: this.responsesClient,
-        model: env.OPENAI_MODEL,
-        instructions: prompt,
-        tools: getAvailableToolDefinitions(),
-        input: inputWithPreparedCurrentTurn(history, preparedInput),
-        executeTool: (toolName, toolInput) =>
-          this.toolExecutor.executeToolCall(toolName, toolInput, {
-            user,
-            conversation,
-            latestUserMessage: preparedInput.text
-          }),
-        maxToolRounds: env.MAX_TOOL_ROUNDS
-      });
-
-      await replyToUser(result.assistantMessage);
+      await replyToUser(await runModelFallback());
     } catch (error) {
       logger.error({ error }, "Failed to process inbound WhatsApp message");
       await this.reply(conversation.id, input.from, userMessageForError(error));
@@ -1041,6 +1081,52 @@ export class AgentOrchestrator {
     } catch (error) {
       logger.warn({ error }, "Failed to store WhatsApp image context");
     }
+  }
+
+  private async executeConcreteAsanaCompletion(input: {
+    tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>;
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<string> {
+    if (input.tasks.length === 1) {
+      const task = input.tasks[0]!;
+      const result = await this.toolExecutor.executeToolCall(
+        "asana_update_task",
+        {
+          taskGid: task.taskGid,
+          completed: true
+        },
+        {
+          user: input.user,
+          conversation: input.conversation,
+          latestUserMessage: input.latestUserMessage
+        },
+        { force: true }
+      );
+      if (!result.ok) {
+        return result.userMessage ?? "I couldn't complete that Asana task.";
+      }
+      return "Completed 1 Asana task.";
+    }
+
+    const result = await this.toolExecutor.executeToolCall(
+      "asana_bulk_update_tasks",
+      {
+        taskGids: input.tasks.map((task) => task.taskGid),
+        completed: true,
+        source: "recent_list",
+        taskPreview: input.tasks
+      },
+      {
+        user: input.user,
+        conversation: input.conversation,
+        latestUserMessage: input.latestUserMessage
+      },
+      { force: true }
+    );
+
+    return result.userMessage ?? `Completed ${input.tasks.length} Asana tasks.`;
   }
 
   private async handleConfirmationIntent(input: {
@@ -1654,6 +1740,23 @@ function imageContextMemoryValue(
   if (context.caption) value.caption = context.caption;
   if (context.sha256) value.sha256 = context.sha256;
   return value;
+}
+
+function integrationConnected(status: SetupStatus, key: "google" | "asana" | "notion"): boolean {
+  return Boolean(
+    status.integrations.find((integration) => integration.key === key && integration.connected)
+  );
+}
+
+function hasNonAsanaCompoundWork(route: IntentRoute): boolean {
+  return route.isCompound && route.domains.some((domain) => domain !== "asana");
+}
+
+function compactReplySections(sections: Array<string | undefined | null>): string {
+  return sections
+    .map((section) => section?.trim())
+    .filter((section): section is string => Boolean(section) && section !== "Done.")
+    .join("\n\n");
 }
 
 function matchRecentGoogleDocDeleteRequest(

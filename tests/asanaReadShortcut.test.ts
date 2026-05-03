@@ -12,7 +12,8 @@ import {
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
-  matchListedAsanaBulkCompleteRequest
+  matchListedAsanaBulkCompleteRequest,
+  resolveConcreteAsanaCompletionTarget
 } from "../src/modules/agent/asanaReadShortcut";
 
 describe("asana read shortcut", () => {
@@ -393,5 +394,101 @@ describe("asana read shortcut", () => {
     });
     expect(explicitDisplay).toContain("25. task 25");
     expect(explicitDisplay).not.toContain("Showing first");
+  });
+
+  it("resolves concrete Asana completion targets from a fresh visible list", () => {
+    const memoryEntries = [
+      {
+        key: "last_visible_asana_task_list",
+        value: {
+          scopeLabel: "My Tasks",
+          returnedCount: 3,
+          storedCount: 3,
+          tasks: [
+            { taskGid: "task_1", name: "First task", projectName: "Scanis" },
+            { taskGid: "task_2", name: "Second task" },
+            { taskGid: "task_3", name: "Third task" }
+          ]
+        },
+        updatedAt: new Date("2026-05-03T18:00:00.000Z")
+      }
+    ] as any;
+    const now = new Date("2026-05-03T19:00:00.000Z");
+
+    expect(
+      resolveConcreteAsanaCompletionTarget("complete the first one", memoryEntries, now)
+    ).toMatchObject({
+      status: "resolved",
+      tasks: [{ taskGid: "task_1" }]
+    });
+    expect(
+      resolveConcreteAsanaCompletionTarget("complete tasks 1 and 3", memoryEntries, now)
+    ).toMatchObject({
+      status: "resolved",
+      tasks: [{ taskGid: "task_1" }, { taskGid: "task_3" }]
+    });
+    expect(
+      resolveConcreteAsanaCompletionTarget("complete those listed tasks", memoryEntries, now)
+    ).toMatchObject({
+      status: "resolved",
+      tasks: [{ taskGid: "task_1" }, { taskGid: "task_2" }, { taskGid: "task_3" }]
+    });
+    expect(
+      resolveConcreteAsanaCompletionTarget("complete Second task", memoryEntries, now)
+    ).toMatchObject({
+      status: "resolved",
+      tasks: [{ taskGid: "task_2" }]
+    });
+  });
+
+  it("guards stale, broad, and oversized Asana completion targets", () => {
+    const memoryEntries = [
+      {
+        key: "last_visible_asana_task_list",
+        value: {
+          scopeLabel: "My Tasks",
+          returnedCount: 50,
+          storedCount: 25,
+          tasks: Array.from({ length: 25 }, (_, index) => ({
+            taskGid: `task_${index + 1}`,
+            name: `Task ${index + 1}`
+          }))
+        },
+        updatedAt: new Date("2026-05-03T18:00:00.000Z")
+      }
+    ] as any;
+
+    expect(
+      resolveConcreteAsanaCompletionTarget(
+        "complete those listed tasks",
+        memoryEntries,
+        new Date("2026-05-03T19:00:00.000Z")
+      )
+    ).toMatchObject({ status: "too_many" });
+    const first25 = resolveConcreteAsanaCompletionTarget(
+      "complete the first 25 shown",
+      memoryEntries,
+      new Date("2026-05-03T19:00:00.000Z")
+    );
+    expect(first25).toMatchObject({ status: "resolved" });
+    if (first25?.status === "resolved") {
+      expect(first25.tasks).toHaveLength(25);
+      expect(first25.tasks[0]?.taskGid).toBe("task_1");
+      expect(first25.tasks[24]?.taskGid).toBe("task_25");
+    }
+    expect(
+      resolveConcreteAsanaCompletionTarget(
+        "complete those listed tasks",
+        memoryEntries,
+        new Date("2026-05-03T21:01:00.000Z")
+      )
+    ).toMatchObject({ status: "stale" });
+    expect(
+      resolveConcreteAsanaCompletionTarget(
+        "complete all overdue tasks",
+        memoryEntries,
+        new Date("2026-05-03T19:00:00.000Z")
+      )
+    ).toMatchObject({ status: "broad" });
   });
 });

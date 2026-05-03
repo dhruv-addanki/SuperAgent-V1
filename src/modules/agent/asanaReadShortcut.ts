@@ -43,6 +43,10 @@ export interface AsanaBulkCompleteClarification {
 
 export interface LastVisibleAsanaTaskList {
   scopeLabel?: string;
+  createdAt?: string;
+  updatedAt?: Date;
+  returnedCount?: number;
+  storedCount?: number;
   tasks: Array<{
     taskGid: string;
     name?: string;
@@ -51,6 +55,13 @@ export interface LastVisibleAsanaTaskList {
     completed?: boolean;
   }>;
 }
+
+export type AsanaCompletionTargetResolution =
+  | { status: "resolved"; tasks: LastVisibleAsanaTaskList["tasks"] }
+  | {
+      status: "needs_list" | "stale" | "empty" | "too_many" | "ambiguous" | "broad";
+      message: string;
+    };
 
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
@@ -86,6 +97,7 @@ const SLASH_DATE_REFERENCE_PATTERN = "\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?";
 const DATE_ONLY_FOLLOW_UP_PATTERN = new RegExp(
   `^(?:(?:what|how)\\s+about\\s+|and\\s+|for\\s+|from\\s+|on\\s+|due\\s+|back\\s+to\\s+)?(?:overdue|old|before\\s+today|before\\s+yesterday|today|tomorrow|yesterday|${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN}|before\\s+(?:${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN}))$`
 );
+const LAST_VISIBLE_ASANA_TASK_LIST_FRESH_MS = 2 * 60 * 60 * 1000;
 
 export function matchGenericAsanaMyTasksRequest(text: string): GenericAsanaTaskTarget | null {
   const normalized = normalize(text);
@@ -176,7 +188,13 @@ export function lastVisibleAsanaTaskList(
 ): LastVisibleAsanaTaskList | null {
   const entry = memoryEntries.find((item) => item.key === "last_visible_asana_task_list");
   if (!entry || !entry.value || typeof entry.value !== "object") return null;
-  const record = entry.value as { tasks?: unknown; scopeLabel?: unknown };
+  const record = entry.value as {
+    tasks?: unknown;
+    scopeLabel?: unknown;
+    createdAt?: unknown;
+    returnedCount?: unknown;
+    storedCount?: unknown;
+  };
   if (!Array.isArray(record.tasks)) return null;
 
   const tasks: LastVisibleAsanaTaskList["tasks"] = [];
@@ -201,8 +219,116 @@ export function lastVisibleAsanaTaskList(
 
   return {
     scopeLabel: typeof record.scopeLabel === "string" ? record.scopeLabel : undefined,
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : undefined,
+    updatedAt: entry.updatedAt,
+    returnedCount: typeof record.returnedCount === "number" ? record.returnedCount : tasks.length,
+    storedCount: typeof record.storedCount === "number" ? record.storedCount : tasks.length,
     tasks
   };
+}
+
+export function resolveConcreteAsanaCompletionTarget(
+  text: string,
+  memoryEntries: PromptMemoryEntry[],
+  now = new Date()
+): AsanaCompletionTargetResolution | null {
+  const normalized = normalizeCompletionText(text);
+  if (!asksToCompleteAsanaTask(normalized)) return null;
+
+  const recentList = lastVisibleAsanaTaskList(memoryEntries);
+  if (isBroadAsanaCompletionRequest(normalized)) {
+    if (!recentList && hasLegacyRecentAsanaTasks(memoryEntries)) return null;
+    return {
+      status: "broad",
+      message: "Do you mean the listed Asana tasks, or every incomplete Asana task I can see?"
+    };
+  }
+
+  if (!recentList) {
+    return {
+      status: "needs_list",
+      message:
+        "I don't have a recent Asana task list to apply that to. Ask me to show the tasks first."
+    };
+  }
+
+  if (!isFreshAsanaTaskList(recentList, now)) {
+    return {
+      status: "stale",
+      message:
+        "That Asana task list is stale. Ask me to show the tasks again before completing them."
+    };
+  }
+
+  const tasks = recentList.tasks.filter((task) => task.taskGid);
+  if (!tasks.length) {
+    return {
+      status: "empty",
+      message: "The last Asana task list I showed had no tasks to complete."
+    };
+  }
+
+  const firstShownTargets = resolveFirstShownCompletionTargets(normalized, tasks);
+  if (firstShownTargets === "too_many") {
+    return {
+      status: "too_many",
+      message:
+        "I can complete at most 25 listed Asana tasks at once. Narrow the list or choose task numbers."
+    };
+  }
+  if (firstShownTargets === "out_of_range") {
+    return {
+      status: "ambiguous",
+      message: `The last Asana list only has ${tasks.length} stored tasks. Pick a number from 1 to ${tasks.length}.`
+    };
+  }
+  if (firstShownTargets.length) {
+    return { status: "resolved", tasks: firstShownTargets };
+  }
+
+  const ordinalTargets = resolveOrdinalCompletionTargets(normalized, tasks);
+  if (ordinalTargets === "out_of_range") {
+    return {
+      status: "ambiguous",
+      message: `That task number is outside the last Asana list I showed. Pick a number from 1 to ${tasks.length}.`
+    };
+  }
+  if (ordinalTargets.length) {
+    return { status: "resolved", tasks: ordinalTargets };
+  }
+
+  const namedTargets = resolveNamedCompletionTargets(normalized, tasks);
+  if (namedTargets === "ambiguous") {
+    return {
+      status: "ambiguous",
+      message: "I found multiple listed Asana tasks with that name. Say the task number instead."
+    };
+  }
+  if (namedTargets.length) {
+    return { status: "resolved", tasks: namedTargets };
+  }
+
+  if (referencesAllListedTasks(normalized)) {
+    const returnedCount = recentList.returnedCount ?? tasks.length;
+    if (returnedCount > tasks.length || returnedCount > 25) {
+      return {
+        status: "too_many",
+        message:
+          "That Asana list is too large for an automatic bulk completion. Narrow the list or say complete the first 25 shown."
+      };
+    }
+    return { status: "resolved", tasks };
+  }
+
+  if (referencesSingleRecentTask(normalized)) {
+    if (tasks.length === 1) return { status: "resolved", tasks };
+    return {
+      status: "ambiguous",
+      message: "Which listed Asana task should I complete? Reply with the task number."
+    };
+  }
+
+  return null;
 }
 
 export function lastFailedAsanaBulkRetryTaskList(
@@ -947,6 +1073,155 @@ function singleProjectNameFromTasks(
     )
   );
   return names.length === 1 ? names[0] : undefined;
+}
+
+function normalizeCompletionText(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[^\w\s,'"&-]/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function asksToCompleteAsanaTask(normalizedText: string): boolean {
+  const asksComplete =
+    /\b(?:complete|finish)\b/.test(normalizedText) ||
+    /\bmark\b.*\b(?:complete|done|finished)\b/.test(normalizedText) ||
+    /\bset\b.*\b(?:complete|done|finished)\b/.test(normalizedText);
+  if (!asksComplete) return false;
+  return (
+    /\basana\b|\btasks?\b|\bit\b|\bthat\b|\bthose\b|\bthese\b|\bthem\b|\bones?\b|\bitems?\b/.test(
+      normalizedText
+    ) || /\b(?:first|second|third|fourth|fifth|\d{1,2})\b/.test(normalizedText)
+  );
+}
+
+function isBroadAsanaCompletionRequest(normalizedText: string): boolean {
+  if (referencesAllListedTasks(normalizedText)) return false;
+  return (
+    /\b(?:all|every)\s+(?:open\s+|incomplete\s+|overdue\s+)?(?:asana\s+)?tasks?\b/.test(
+      normalizedText
+    ) ||
+    /\bcomplete\s+(?:all|every)\b/.test(normalizedText) ||
+    /\bmark\s+(?:all|every)\b.*\b(?:complete|done|finished)\b/.test(normalizedText)
+  );
+}
+
+function hasLegacyRecentAsanaTasks(memoryEntries: PromptMemoryEntry[]): boolean {
+  return memoryEntries.some((entry) => entry.key === "recent_asana_tasks");
+}
+
+function isFreshAsanaTaskList(list: LastVisibleAsanaTaskList, now: Date): boolean {
+  const timestamp = list.updatedAt ?? (list.createdAt ? new Date(list.createdAt) : null);
+  if (!timestamp || Number.isNaN(timestamp.getTime())) return false;
+  return now.getTime() - timestamp.getTime() <= LAST_VISIBLE_ASANA_TASK_LIST_FRESH_MS;
+}
+
+function referencesAllListedTasks(normalizedText: string): boolean {
+  return (
+    /\b(?:those|these|them)\b/.test(normalizedText) ||
+    /\blisted\s+tasks?\b|\btasks?\s+listed\b|\bshown\s+tasks?\b|\btasks?\s+shown\b/.test(
+      normalizedText
+    ) ||
+    /\b(?:the|that|this)\s+list\b/.test(normalizedText)
+  );
+}
+
+function referencesSingleRecentTask(normalizedText: string): boolean {
+  return (
+    /\b(?:that|this)\s+(?:asana\s+)?tasks?\b/.test(normalizedText) ||
+    /\b(?:mark|complete|finish|set)\s+(?:it|that|this)\b/.test(normalizedText) ||
+    /\b(?:it|that|this)\s+(?:as\s+)?(?:complete|done|finished)\b/.test(normalizedText)
+  );
+}
+
+function resolveFirstShownCompletionTargets(
+  normalizedText: string,
+  tasks: LastVisibleAsanaTaskList["tasks"]
+): LastVisibleAsanaTaskList["tasks"] | "too_many" | "out_of_range" {
+  const match = normalizedText.match(
+    /\b(?:first|top)\s+(\d{1,2})\s+(?:shown|listed|tasks?|items?|ones?)\b/
+  );
+  if (!match?.[1]) return [];
+
+  const count = Number.parseInt(match[1], 10);
+  if (count > 25) return "too_many";
+  if (count < 1 || count > tasks.length) return "out_of_range";
+  return tasks.slice(0, count);
+}
+
+function resolveOrdinalCompletionTargets(
+  normalizedText: string,
+  tasks: LastVisibleAsanaTaskList["tasks"]
+): LastVisibleAsanaTaskList["tasks"] | "out_of_range" {
+  const indices = new Set<number>();
+  const explicitNumberGroup = normalizedText.match(
+    /\b(?:tasks?|items?|ones?)\s+((?:\d{1,2}\s*(?:,|and|&)?\s*){1,10})\b/
+  );
+  if (explicitNumberGroup?.[1]) {
+    for (const match of explicitNumberGroup[1].matchAll(/\d{1,2}/g)) {
+      indices.add(Number.parseInt(match[0], 10));
+    }
+  }
+
+  const ordinalWords: Record<string, number> = {
+    first: 1,
+    "1st": 1,
+    second: 2,
+    "2nd": 2,
+    third: 3,
+    "3rd": 3,
+    fourth: 4,
+    "4th": 4,
+    fifth: 5,
+    "5th": 5,
+    sixth: 6,
+    "6th": 6,
+    seventh: 7,
+    "7th": 7,
+    eighth: 8,
+    "8th": 8,
+    ninth: 9,
+    "9th": 9,
+    tenth: 10,
+    "10th": 10
+  };
+  for (const [word, index] of Object.entries(ordinalWords)) {
+    if (new RegExp(`\\b${word}\\s+(?:tasks?|items?|ones?)?\\b`).test(normalizedText)) {
+      indices.add(index);
+    }
+  }
+
+  if (!indices.size) return [];
+  const selected: LastVisibleAsanaTaskList["tasks"] = [];
+  for (const index of Array.from(indices).sort((left, right) => left - right)) {
+    if (index < 1 || index > tasks.length) return "out_of_range";
+    selected.push(tasks[index - 1]!);
+  }
+  return selected;
+}
+
+function resolveNamedCompletionTargets(
+  normalizedText: string,
+  tasks: LastVisibleAsanaTaskList["tasks"]
+): LastVisibleAsanaTaskList["tasks"] | "ambiguous" {
+  const matches = tasks.filter((task) => {
+    if (!task.name || task.name.trim().length < 3) return false;
+    const normalizedName = normalizeCompletionText(task.name);
+    return new RegExp(`(^|\\b)${escapeRegExp(normalizedName)}(\\b|$)`).test(normalizedText);
+  });
+  if (!matches.length) return [];
+
+  const matchedNames = new Set(matches.map((task) => normalizeCompletionText(task.name ?? "")));
+  if (
+    matches.length > 1 &&
+    matchedNames.size === 1 &&
+    !/\b(?:all|both|those|these)\b/.test(normalizedText)
+  ) {
+    return "ambiguous";
+  }
+  return matches;
 }
 
 function formatTaskLine(task: AsanaTaskSummary): string {

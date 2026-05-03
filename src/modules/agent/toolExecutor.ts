@@ -669,6 +669,8 @@ export class ToolExecutor {
         value: {
           scopeLabel,
           tasks: normalizedTasks,
+          returnedCount: tasks.length,
+          storedCount: normalizedTasks.length,
           createdAt: new Date().toISOString()
         },
         confidence: 1
@@ -679,6 +681,8 @@ export class ToolExecutor {
         value: {
           scopeLabel,
           tasks: normalizedTasks,
+          returnedCount: tasks.length,
+          storedCount: normalizedTasks.length,
           createdAt: new Date().toISOString()
         },
         confidence: 1

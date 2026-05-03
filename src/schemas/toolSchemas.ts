@@ -438,7 +438,7 @@ export const toolDescriptions: Record<ToolName, string> = {
   asana_delete_task:
     "Delete an existing Asana task. Provide exactly one of taskGid or taskName; task names auto-resolve only when unique.",
   asana_bulk_update_tasks:
-    "Mark up to 25 explicitly listed Asana tasks complete. Bulk completion always requires user confirmation before execution. Use taskPreview/source when completing a recent listed task set.",
+    "Mark up to 25 explicitly listed Asana tasks complete. Model-initiated bulk completion requires confirmation; backend deterministic recent-list completion may execute without confirmation. Use taskPreview/source when completing a recent listed task set.",
   notion_search_pages:
     "Search Notion pages by optional text query. Omit query to list accessible pages when the user asks what is in Notion or wants a broad Notion check.",
   notion_read_page: "Read a Notion page by page ID, including bounded text from its child blocks.",

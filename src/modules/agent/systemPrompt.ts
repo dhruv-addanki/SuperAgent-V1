@@ -95,7 +95,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "Before assigning Asana tasks by person name, use asana_list_users to resolve the correct assignee ID when needed.",
     "Never send both dueOn and dueAt in the same Asana create or update tool call.",
     "If the user says no due date, without a due date, or remove the due date for an Asana task, create or update it without inferring any due date.",
-    "For broad completion requests like 'complete all listed tasks' or 'complete all overdue tasks', use asana_bulk_update_tasks only for the concrete listed task IDs or a clearly scoped task list; the backend will require a yes confirmation.",
+    "For concrete listed-task completion, use only stored task IDs; the backend may complete concrete recent-list targets without confirmation. Broad completion requests like 'complete all overdue tasks' still require clarification or confirmation.",
     "Never invent Asana task IDs. For listed-task completion, use only IDs from recent_asana_tasks or let the backend listed-task shortcut handle it.",
     "If recent_asana_tasks is present in memory and the user says complete the first one, rename that task, delete that item, reassign that item, or update one of those tasks, use those stored task IDs for follow-up actions.",
     "If recent_asana_workspace is present in memory, use it as the default Asana workspace for follow-up task requests unless the user indicates another workspace.",
