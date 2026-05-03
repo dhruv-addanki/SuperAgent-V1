@@ -549,7 +549,8 @@ function referencesWeb(original: string, normalized: string): boolean {
     /\bsearch\b.*\b(web|internet|online)\b/.test(normalized) ||
     /\bgoogle (?:it|this|that)\b/.test(normalized) ||
     /\b(stock|stocks|share|shares|market|earnings|ticker)\b/.test(normalized) ||
-    (/\b[A-Z]{2,5}\b/.test(original) &&
+    (!/\btasks?\b/.test(normalized) &&
+      /\b[A-Z]{2,5}\b/.test(original) &&
       /\b(why|up|down|news|today|price|move|moving|doing)\b/.test(normalized))
   );
 }

@@ -199,6 +199,51 @@ describe("asana service", () => {
     expect(tasks[0]).toMatchObject({ gid: "task_1", name: "Today" });
   });
 
+  it("filters My Tasks and project tasks with inclusive dueAfter bounds", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: { gid: "utl_1" }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            { gid: "task_1", name: "Too old", completed: false, due_on: "2026-02-13" },
+            { gid: "task_2", name: "Lower bound", completed: false, due_on: "2026-02-14" },
+            { gid: "task_3", name: "Later", completed: false, due_on: "2026-02-15" }
+          ]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            { gid: "task_4", name: "Project too old", completed: false, due_on: "2026-02-13" },
+            { gid: "task_5", name: "Project lower bound", completed: false, due_on: "2026-02-14" }
+          ]
+        })
+      });
+
+    const service = new AsanaService("token");
+    const myTasks = await service.listMyTasks({
+      workspaceGid: "workspace_1",
+      completed: false,
+      dueAfter: "2026-02-14",
+      sortBy: "due"
+    });
+    const projectTasks = await service.listProjectTasks({
+      projectGid: "project_1",
+      completed: false,
+      dueAfter: "2026-02-14"
+    });
+
+    expect(myTasks.map((task) => task.gid)).toEqual(["task_2", "task_3"]);
+    expect(projectTasks.map((task) => task.gid)).toEqual(["task_5"]);
+  });
+
   it("sorts latest completed project tasks by completed_at", async () => {
     fetchMock.mockResolvedValue({
       ok: true,

@@ -119,9 +119,13 @@ describe("tool schemas", () => {
       toolInputSchemas.asana_list_project_tasks.parse({
         projectGid: "project_1",
         dueOn: "2026-04-22",
+        dueAfter: "2026-02-14",
         limit: 5
-      }).dueOn
-    ).toBe("2026-04-22");
+      })
+    ).toMatchObject({
+      dueOn: "2026-04-22",
+      dueAfter: "2026-02-14"
+    });
   });
 
   it("validates guarded Asana bulk completion inputs", () => {

@@ -208,6 +208,7 @@ export const toolInputSchemas = {
       workspaceGid: z.string().min(1).optional(),
       completed: z.boolean().optional(),
       dueOn: isoDateOnly.optional(),
+      dueAfter: isoDateOrDateTime.optional(),
       dueBefore: isoDateOrDateTime.optional(),
       limit: z.number().int().positive().max(100).optional(),
       sortBy: asanaSortBy.optional(),
@@ -222,6 +223,7 @@ export const toolInputSchemas = {
       projectName: z.string().min(1).optional(),
       completed: z.boolean().optional(),
       dueOn: isoDateOnly.optional(),
+      dueAfter: isoDateOrDateTime.optional(),
       dueBefore: isoDateOrDateTime.optional(),
       limit: z.number().int().positive().max(100).optional(),
       sortBy: asanaSortBy.optional(),
@@ -423,9 +425,9 @@ export const toolDescriptions: Record<ToolName, string> = {
   asana_list_users:
     "List Asana users in a workspace. If workspaceGid is omitted, the backend resolves the remembered or only workspace.",
   asana_list_my_tasks:
-    "List Asana My Tasks. Always use this for personal task browsing, due today, due soon, digest, and automation task reads.",
+    "List Asana My Tasks. Always use this for personal task browsing, overdue/backlog reads, due today, due soon, digest, and automation task reads. Use dueBefore/dueAfter for date ranges.",
   asana_list_project_tasks:
-    "List tasks in a named or ID-based Asana project. Provide exactly one of projectGid or projectName; names auto-resolve only when unique.",
+    "List tasks in a named or ID-based Asana project. Provide exactly one of projectGid or projectName; names auto-resolve only when unique. Use dueBefore/dueAfter for date ranges.",
   asana_search_tasks:
     "Search Asana tasks in a workspace by literal text and optional projectGid/projectName filters. Project names auto-resolve only when unique.",
   asana_get_task: "Read a single Asana task by task GID.",

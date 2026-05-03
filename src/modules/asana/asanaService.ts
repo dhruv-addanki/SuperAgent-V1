@@ -144,6 +144,15 @@ function beforeDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueBefore?: 
   return dueTimestamp(task) <= filterTimestamp;
 }
 
+function afterDue(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueAfter?: string): boolean {
+  if (!dueAfter) return true;
+  const filterTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(dueAfter)
+    ? Date.parse(`${dueAfter}T00:00:00.000Z`)
+    : Date.parse(dueAfter);
+  if (Number.isNaN(filterTimestamp)) return true;
+  return dueTimestamp(task) >= filterTimestamp;
+}
+
 function matchesDueDate(task: Pick<AsanaTaskSummary, "dueAt" | "dueOn">, dueOn?: string): boolean {
   if (!dueOn) return true;
   return dueDate(task) === dueOn;
@@ -161,6 +170,7 @@ function filterTasks(
   tasks: AsanaTaskSummary[],
   input: {
     completed?: boolean;
+    dueAfter?: string;
     dueBefore?: string;
     dueOn?: string;
     limit?: number;
@@ -172,6 +182,7 @@ function filterTasks(
   const filtered = tasks
     .filter((task) => (input.completed === undefined ? true : task.completed === input.completed))
     .filter((task) => matchesDueDate(task, input.dueOn))
+    .filter((task) => afterDue(task, input.dueAfter))
     .filter((task) => beforeDue(task, input.dueBefore));
 
   const sorted = sortTasks(filtered, input.sortBy, input.sortDirection);
@@ -320,6 +331,7 @@ export class AsanaService {
   async listMyTasks(input: {
     workspaceGid: string;
     completed?: boolean;
+    dueAfter?: string;
     dueBefore?: string;
     dueOn?: string;
     limit?: number;
@@ -393,6 +405,7 @@ export class AsanaService {
   async listProjectTasks(input: {
     projectGid: string;
     completed?: boolean;
+    dueAfter?: string;
     dueBefore?: string;
     dueOn?: string;
     limit?: number;

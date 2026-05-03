@@ -93,6 +93,26 @@ describe("intent router", () => {
     expect(route.trace).not.toContain("setup:high:setup_request");
   });
 
+  it("does not treat uppercase project-name fragments as stock tickers in task requests", () => {
+    const route = classifyIntentRoute({
+      text: "show open tasks in Scanis-OLD due before today",
+      memoryEntries: [
+        {
+          key: "recent_asana_projects",
+          value: [{ projectGid: "project_1", name: "Scanis-OLD" }],
+          updatedAt: new Date("2026-05-02T22:00:00.000Z")
+        }
+      ] as any
+    });
+
+    expect(route).toMatchObject({
+      domains: ["asana"],
+      primaryDomain: "asana",
+      action: "read",
+      shortcutCandidate: "asana_list"
+    });
+  });
+
   it("routes email send requests as Gmail drafts", () => {
     const route = classifyIntentRoute({ text: "send an email to Brad" });
 

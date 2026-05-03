@@ -88,6 +88,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "When the user names an Asana task and no stored task GID is available, pass taskName instead of guessing a taskGid. The backend will auto-resolve only a unique match and ask the user when ambiguous.",
     "Use asana_search_tasks only for explicit literal keyword search requests. Do not use text search for date phrases like today, tomorrow, due this week, or overdue.",
     "When the user asks for today's Asana tasks or due-today work, translate that into a dueOn filter on asana_list_my_tasks or asana_list_project_tasks.",
+    "When the user asks for overdue, stale, backlog, old, or due-before Asana tasks, use dueBefore on asana_list_my_tasks or asana_list_project_tasks; do not translate those phrases to dueOn today.",
+    "When the user asks for an Asana range like from/since/back to a date, use dueAfter plus dueBefore when applicable.",
     "If the user says across all projects, across My Tasks, or otherwise asks for all of their Asana work, do not narrow the answer to a recent project.",
     "If the user asks for the latest or last open/completed Asana task, rely on task timestamps such as completed_at, modified_at, or created_at instead of recent display order.",
     "Before assigning Asana tasks by person name, use asana_list_users to resolve the correct assignee ID when needed.",

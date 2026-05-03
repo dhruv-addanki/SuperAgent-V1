@@ -1,4 +1,5 @@
 import { env } from "../../config/env";
+import { userMessageForError } from "../../lib/errors";
 import type {
   ResponseInputItem,
   ResponsesApiResponse,
@@ -187,7 +188,10 @@ async function executeOneToolCall(
       result: {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
-        userMessage: `I couldn't complete the ${toolLabel(call.name)} step.`
+        userMessage:
+          userMessageForError(error) === "I hit a problem handling that. Please try again."
+            ? `I couldn't complete the ${toolLabel(call.name)} step.`
+            : userMessageForError(error)
       }
     };
   }

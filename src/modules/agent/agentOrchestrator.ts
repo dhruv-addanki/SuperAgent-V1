@@ -319,6 +319,15 @@ export class AgentOrchestrator {
         if (handled) return;
       }
 
+      const projectFollowUpClarification = matchAmbiguousProjectFollowUpClarification(
+        preparedInput.text,
+        history
+      );
+      if (shouldUseTextShortcuts && projectFollowUpClarification) {
+        await replyToUser(projectFollowUpClarification);
+        return;
+      }
+
       const asanaBulkRetry = matchAsanaBulkRetryRequest(preparedInput.text, memoryEntries);
       if (
         shouldUseTextShortcuts &&
@@ -710,7 +719,9 @@ export class AgentOrchestrator {
           toolName,
           {
             ...(asanaLatestShortcut.project
-              ? { projectGid: asanaLatestShortcut.project.projectGid }
+              ? asanaLatestShortcut.project.projectGid
+                ? { projectGid: asanaLatestShortcut.project.projectGid }
+                : { projectName: asanaLatestShortcut.project.name }
               : {}),
             completed: asanaLatestShortcut.completed,
             limit: asanaLatestShortcut.limit,
@@ -765,10 +776,13 @@ export class AgentOrchestrator {
           toolName,
           {
             ...(asanaListShortcut.project
-              ? { projectGid: asanaListShortcut.project.projectGid }
+              ? asanaListShortcut.project.projectGid
+                ? { projectGid: asanaListShortcut.project.projectGid }
+                : { projectName: asanaListShortcut.project.name }
               : {}),
             completed: asanaListShortcut.completed,
             dueOn: asanaListShortcut.dueOn,
+            dueAfter: asanaListShortcut.dueAfter,
             dueBefore: asanaListShortcut.dueBefore,
             limit: asanaListShortcut.limit,
             sortBy: asanaListShortcut.sortBy,
@@ -1569,6 +1583,43 @@ function formatAsanaProjectsReply(projects: AsanaProjectSummary[]): string {
       return `${index + 1}. ${project.name}${details ? ` (${details})` : ""}`;
     })
   ].join("\n");
+}
+
+function matchAmbiguousProjectFollowUpClarification(
+  text: string,
+  history: ResponseInputItem[]
+): string | null {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").trim();
+  if (!/^(?:yes|yep|yeah|sure|ok|okay)(?:\s+(?:do|check)\s+that)?$/.test(normalized)) {
+    return null;
+  }
+
+  const previous = lastAssistantText(history);
+  if (!previous || !/\bspecific project\b/i.test(previous)) return null;
+
+  const projects = extractOfferedProjectNames(previous);
+  if (projects.length < 2) return null;
+
+  return `Which project should I check: ${projects.join(" or ")}?`;
+}
+
+function lastAssistantText(history: ResponseInputItem[]): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index];
+    if (item?.role !== "assistant") continue;
+    return typeof item.content === "string" ? item.content : null;
+  }
+  return null;
+}
+
+function extractOfferedProjectNames(text: string): string[] {
+  const match = text.match(/\blike\s+([^.\n?]+)/i);
+  if (!match?.[1]) return [];
+  return match[1]
+    .split(/\s+or\s+|,\s*/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 4);
 }
 
 function inputWithPreparedCurrentTurn(

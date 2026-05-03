@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listWorkspacesMock = vi.fn();
 const listProjectsMock = vi.fn();
@@ -30,6 +30,9 @@ vi.mock("../src/modules/asana/asanaService", () => ({
 
 import { ToolExecutor } from "../src/modules/agent/toolExecutor";
 import { UserFacingError } from "../src/lib/errors";
+import { env } from "../src/config/env";
+
+const originalAsanaPatFallbackToken = env.ASANA_PAT_FALLBACK_TOKEN;
 
 function makePrisma(initialMemory: Record<string, unknown> = {}) {
   const memory = new Map(
@@ -173,6 +176,11 @@ describe("tool executor Asana flows", () => {
       name: "Ship Asana integration",
       summary: "Deleted Asana task: Ship Asana integration"
     });
+  });
+
+  afterEach(() => {
+    (env as any).ASANA_PAT_FALLBACK_TOKEN = originalAsanaPatFallbackToken;
+    vi.useRealTimers();
   });
 
   it("stores recent Asana project and team context when listing projects", async () => {
@@ -364,6 +372,29 @@ describe("tool executor Asana flows", () => {
     );
   });
 
+  it("strips inferred due dates from task creation when the user did not mention a due date", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        name: "test 1",
+        dueOn: "2026-05-02",
+        projectNames: ["Scanis"],
+        assigneeGid: "me"
+      },
+      makeContext("add a task called test 1 to project Scanis")
+    );
+
+    expect(result.ok).toBe(true);
+    const createInput = createTaskMock.mock.calls[0]?.[0];
+    expect(createInput).toMatchObject({
+      name: "test 1",
+      assigneeGid: "user_asana_1"
+    });
+    expect(createInput).not.toHaveProperty("dueOn");
+  });
+
   it("normalizes null-like assignee strings to the connected Asana user", async () => {
     const executor = makeExecutor();
 
@@ -396,6 +427,130 @@ describe("tool executor Asana flows", () => {
       expect.objectContaining({
         name: "Assigned task",
         assigneeGid: "1200000000000001"
+      })
+    );
+  });
+
+  it("retries assigned task creation through PAT fallback when OAuth rejects assigned writes", async () => {
+    (env as any).ASANA_PAT_FALLBACK_TOKEN = "pat-token";
+    const prisma = makePrisma();
+    const executor = makeExecutor(prisma);
+    createTaskMock
+      .mockRejectedValueOnce(
+        new UserFacingError(
+          "Asana assignee write unavailable",
+          "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+          "Asana is rejecting assigned task writes right now."
+        )
+      )
+      .mockResolvedValueOnce({
+        gid: "task_pat",
+        name: "Assigned fallback task",
+        completed: false,
+        workspaceGid: "workspace_1",
+        workspaceName: "Product",
+        assigneeGid: "user_asana_1",
+        assigneeName: "Dhruv"
+      });
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        workspaceGid: "workspace_1",
+        name: "Assigned fallback task",
+        dueOn: "2026-05-03",
+        assigneeGid: "me"
+      },
+      makeContext("add an assigned fallback task due tomorrow")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledTimes(2);
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          requestPayload: expect.objectContaining({
+            authPath: "pat_fallback"
+          })
+        })
+      })
+    );
+  });
+
+  it("reports fallback configuration clearly when OAuth rejects assigned writes and PAT is unset", async () => {
+    (env as any).ASANA_PAT_FALLBACK_TOKEN = "";
+    const executor = makeExecutor();
+    createTaskMock.mockRejectedValueOnce(
+      new UserFacingError(
+        "Asana assignee write unavailable",
+        "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+        "Asana is rejecting assigned task writes right now."
+      )
+    );
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        workspaceGid: "workspace_1",
+        name: "Assigned fallback unavailable task",
+        dueOn: "2026-05-03",
+        assigneeGid: "me"
+      },
+      makeContext("add an assigned fallback unavailable task due tomorrow")
+    );
+
+    expect(result.ok).toBe(false);
+    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    expect(result.userMessage).toContain("ASANA_PAT_FALLBACK_TOKEN is not configured");
+  });
+
+  it("treats a recent matching created task as success before PAT retrying create", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-02T20:00:00.000Z"));
+    (env as any).ASANA_PAT_FALLBACK_TOKEN = "pat-token";
+    const prisma = makePrisma();
+    const executor = makeExecutor(prisma);
+    createTaskMock.mockRejectedValueOnce(
+      new UserFacingError(
+        "Asana assignee write unavailable",
+        "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+        "Asana is rejecting assigned task writes right now."
+      )
+    );
+    listMyTasksMock.mockResolvedValueOnce([
+      {
+        gid: "task_duplicate",
+        name: "Duplicate guard task",
+        completed: false,
+        workspaceGid: "workspace_1",
+        workspaceName: "Product",
+        dueOn: "2026-05-03",
+        assigneeGid: "user_asana_1",
+        createdAt: "2026-05-02T19:59:00.000Z"
+      }
+    ]);
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        workspaceGid: "workspace_1",
+        name: "Duplicate guard task",
+        dueOn: "2026-05-03",
+        assigneeGid: "me"
+      },
+      makeContext("add a duplicate guard task due tomorrow")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    expect(result.data).toMatchObject({ gid: "task_duplicate" });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          requestPayload: expect.objectContaining({
+            authPath: "oauth_duplicate_after_failure"
+          })
+        })
       })
     );
   });

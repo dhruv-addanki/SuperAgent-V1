@@ -109,6 +109,20 @@ function mentionsExplicitDueTime(latestUserMessage: string): boolean {
   return TIME_OF_DAY_PATTERN.test(latestUserMessage);
 }
 
+function mentionsDueDate(latestUserMessage: string): boolean {
+  const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'");
+  return (
+    /\b(due|deadline|today|tomorrow|tmr|tmrw|tonight|yesterday)\b/.test(normalized) ||
+    /\b(?:by|on|before|after)\s+(?:\d{1,2}\/\d{1,2}|\d{4}-\d{2}-\d{2})\b/.test(normalized) ||
+    /\b(?:by|on|before|after|next|this)\s+(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|week|month)\b/.test(
+      normalized
+    ) ||
+    /\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?\b/.test(
+      normalized
+    )
+  );
+}
+
 function shouldKeepAsanaCreateProjectContext(input: any, latestUserMessage: string): boolean {
   const projectNames = Array.isArray(input.projectNames)
     ? input.projectNames.filter((name: unknown): name is string => typeof name === "string")
@@ -174,6 +188,11 @@ function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMess
   ) {
     delete normalized.projectGids;
     delete normalized.projectNames;
+  }
+
+  if (toolName === "asana_create_task" && !mentionsDueDate(latestUserMessage)) {
+    delete normalized.dueOn;
+    delete normalized.dueAt;
   }
 
   if (!hasDueOn && !hasDueAt) return normalized;
@@ -1024,6 +1043,101 @@ export class ToolExecutor {
       : undefined;
   }
 
+  private async createAsanaTaskWithAssignedFallback(
+    service: AsanaService,
+    input: any
+  ): Promise<{ data: AsanaTaskSummary; authPath: string }> {
+    try {
+      return {
+        data: await service.createTask(input),
+        authPath: "oauth"
+      };
+    } catch (error) {
+      if (!shouldUseAsanaAssignedWriteFallback(error, input.assigneeGid)) throw error;
+
+      const duplicate = await this.findRecentAsanaCreateDuplicate(service, input);
+      if (duplicate) {
+        return {
+          data: duplicate,
+          authPath: "oauth_duplicate_after_failure"
+        };
+      }
+
+      const fallbackService = this.asanaPatFallbackService();
+      if (!fallbackService) throw asanaPatFallbackUnavailable(error);
+
+      try {
+        return {
+          data: await fallbackService.createTask(input),
+          authPath: "pat_fallback"
+        };
+      } catch (fallbackError) {
+        throw asanaPatFallbackFailed(error, fallbackError);
+      }
+    }
+  }
+
+  private async updateAsanaTaskWithAssignedFallback(
+    service: AsanaService,
+    input: any
+  ): Promise<{ data: AsanaTaskSummary; authPath: string }> {
+    try {
+      return {
+        data: await service.updateTask(input),
+        authPath: "oauth"
+      };
+    } catch (error) {
+      if (!shouldUseAsanaAssignedWriteFallback(error, input.assigneeGid)) throw error;
+
+      const fallbackService = this.asanaPatFallbackService();
+      if (!fallbackService) throw asanaPatFallbackUnavailable(error);
+
+      try {
+        return {
+          data: await fallbackService.updateTask(input),
+          authPath: "pat_fallback"
+        };
+      } catch (fallbackError) {
+        throw asanaPatFallbackFailed(error, fallbackError);
+      }
+    }
+  }
+
+  private asanaPatFallbackService(): AsanaService | null {
+    const token = env.ASANA_PAT_FALLBACK_TOKEN.trim();
+    return token ? new AsanaService(token) : null;
+  }
+
+  private async findRecentAsanaCreateDuplicate(
+    service: AsanaService,
+    input: any
+  ): Promise<AsanaTaskSummary | null> {
+    try {
+      const candidates =
+        Array.isArray(input.projectGids) && input.projectGids.length === 1
+          ? await service.listProjectTasks({
+              projectGid: input.projectGids[0],
+              completed: false,
+              limit: 100,
+              sortBy: "createdAt",
+              sortDirection: "desc"
+            })
+          : input.workspaceGid
+            ? await service.listMyTasks({
+                workspaceGid: input.workspaceGid,
+                completed: false,
+                limit: 100,
+                sortBy: "createdAt",
+                sortDirection: "desc"
+              })
+            : [];
+
+      return candidates.find((task) => isRecentDuplicateAsanaCreateCandidate(task, input)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private async updateAsanaTaskCompletedWithRetry(
     service: AsanaService,
     taskGid: string
@@ -1554,6 +1668,7 @@ export class ToolExecutor {
             projectGid,
             completed: input.completed,
             dueOn: input.dueOn,
+            dueAfter: input.dueAfter,
             dueBefore: input.dueBefore,
             limit: input.limit,
             sortBy: input.sortBy,
@@ -1633,12 +1748,16 @@ export class ToolExecutor {
             assigneeGid: input.assigneeGid,
             projectGids
           });
-          const data = await service.createTask({
+          const createInput = {
             ...input,
             workspaceGid,
             projectGids,
             assigneeGid
-          });
+          };
+          const { data, authPath } = await this.createAsanaTaskWithAssignedFallback(
+            service,
+            createInput
+          );
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
           await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           const rememberedWorkspaceGid = data.workspaceGid ?? workspaceGid;
@@ -1652,7 +1771,7 @@ export class ToolExecutor {
             userId: context.user.id,
             actionType: "asana_create_task",
             toolName,
-            requestPayload: { ...input, workspaceGid, projectGids, assigneeGid },
+            requestPayload: { ...input, workspaceGid, projectGids, assigneeGid, authPath },
             responsePayload: data,
             status: "executed"
           });
@@ -1665,7 +1784,7 @@ export class ToolExecutor {
             taskGid: input.taskGid,
             taskName: input.taskName
           });
-          const data = await service.updateTask({
+          const updateInput = {
             taskGid,
             name: input.name,
             notes: input.notes,
@@ -1673,7 +1792,11 @@ export class ToolExecutor {
             dueAt: input.dueAt,
             assigneeGid: input.assigneeGid,
             completed: input.completed
-          });
+          };
+          const { data, authPath } = await this.updateAsanaTaskWithAssignedFallback(
+            service,
+            updateInput
+          );
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
           await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           if (data.workspaceGid) {
@@ -1686,7 +1809,7 @@ export class ToolExecutor {
             userId: context.user.id,
             actionType: "asana_update_task",
             toolName,
-            requestPayload: input,
+            requestPayload: { ...input, taskGid, authPath },
             responsePayload: data,
             status: "executed"
           });
@@ -1989,6 +2112,53 @@ function errorCode(error: unknown): string {
     if (typeof code === "string" && code.trim()) return code;
   }
   return "ASANA_UNKNOWN_ERROR";
+}
+
+function shouldUseAsanaAssignedWriteFallback(error: unknown, assigneeGid: unknown): boolean {
+  return (
+    errorCode(error) === "ASANA_ASSIGNEE_WRITE_UNAVAILABLE" &&
+    typeof assigneeGid === "string" &&
+    Boolean(assigneeGid.trim())
+  );
+}
+
+function asanaPatFallbackUnavailable(originalError: unknown): UserFacingError {
+  const error = new UserFacingError(
+    "Asana PAT fallback unavailable",
+    "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+    "Asana is rejecting assigned task writes through OAuth (ASANA_ASSIGNEE_WRITE_UNAVAILABLE), and ASANA_PAT_FALLBACK_TOKEN is not configured. I did not create an unassigned task because it may not show in My Tasks."
+  );
+  (error as Error & { cause?: unknown }).cause = originalError;
+  return error;
+}
+
+function asanaPatFallbackFailed(originalError: unknown, fallbackError: unknown): UserFacingError {
+  const error = new UserFacingError(
+    "Asana PAT fallback failed",
+    "ASANA_ASSIGNEE_WRITE_UNAVAILABLE",
+    "Asana rejected the assigned task write through OAuth, and the PAT fallback also failed (ASANA_ASSIGNEE_WRITE_UNAVAILABLE). I did not create an unassigned task."
+  );
+  (error as Error & { cause?: unknown }).cause = { originalError, fallbackError };
+  return error;
+}
+
+function isRecentDuplicateAsanaCreateCandidate(task: AsanaTaskSummary, input: any): boolean {
+  if (task.name !== input.name) return false;
+  if (input.dueOn && task.dueOn !== input.dueOn) return false;
+  if (input.dueAt && task.dueAt !== input.dueAt) return false;
+  if (!matchesAsanaProjectSet(task, input.projectGids)) return false;
+  if (!task.createdAt) return false;
+
+  const createdAt = Date.parse(task.createdAt);
+  return Number.isFinite(createdAt) && Date.now() - createdAt <= 10 * 60_000;
+}
+
+function matchesAsanaProjectSet(task: AsanaTaskSummary, projectGids: unknown): boolean {
+  if (!Array.isArray(projectGids) || !projectGids.length) return true;
+  const taskProjectGids = new Set((task.projects ?? []).map((project) => project.gid));
+  return projectGids.every((projectGid) =>
+    typeof projectGid === "string" ? taskProjectGids.has(projectGid) : false
+  );
 }
 
 function isAsanaSelfOrEmptyAssignee(value: string): boolean {

@@ -60,6 +60,7 @@ const envSchema = z
     ASANA_CLIENT_ID: z.string().min(1).default("dev-asana-client-id"),
     ASANA_CLIENT_SECRET: z.string().min(1).default("dev-asana-client-secret"),
     ASANA_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/asana/callback"),
+    ASANA_PAT_FALLBACK_TOKEN: z.string().optional().default(""),
     NOTION_CLIENT_ID: z.string().min(1).default("dev-notion-client-id"),
     NOTION_CLIENT_SECRET: z.string().min(1).default("dev-notion-client-secret"),
     NOTION_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/notion/callback"),

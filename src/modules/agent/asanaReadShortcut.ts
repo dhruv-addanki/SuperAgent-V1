@@ -7,7 +7,7 @@ import type { PromptMemoryEntry } from "./conversationContext";
 export type GenericAsanaTaskTarget = "today" | "tomorrow";
 
 export interface ResolvedAsanaProjectShortcut {
-  projectGid: string;
+  projectGid?: string;
   name: string;
 }
 
@@ -15,6 +15,7 @@ export interface AsanaListShortcut {
   scope: "my_tasks" | "project";
   project?: ResolvedAsanaProjectShortcut;
   dueOn?: string;
+  dueAfter?: string;
   dueBefore?: string;
   completed?: boolean;
   sortBy?: "due" | "createdAt" | "modifiedAt" | "completedAt";
@@ -79,8 +80,10 @@ const MONTH_INDEX: Record<string, number> = {
 const MONTH_NAME_PATTERN =
   "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec";
 const MONTH_DAY_REFERENCE_PATTERN = `(?:${MONTH_NAME_PATTERN})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,\\s*\\d{4})?`;
+const ISO_DATE_REFERENCE_PATTERN = "\\d{4}-\\d{2}-\\d{2}";
+const SLASH_DATE_REFERENCE_PATTERN = "\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?";
 const DATE_ONLY_FOLLOW_UP_PATTERN = new RegExp(
-  `^(?:(?:what|how)\\s+about\\s+|and\\s+|for\\s+|from\\s+|on\\s+|due\\s+)?(?:before\\s+yesterday|today|tomorrow|yesterday|${MONTH_DAY_REFERENCE_PATTERN}|before\\s+${MONTH_DAY_REFERENCE_PATTERN})$`
+  `^(?:(?:what|how)\\s+about\\s+|and\\s+|for\\s+|from\\s+|on\\s+|due\\s+|back\\s+to\\s+)?(?:overdue|old|before\\s+today|before\\s+yesterday|today|tomorrow|yesterday|${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN}|before\\s+(?:${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN}))$`
 );
 
 export function matchGenericAsanaMyTasksRequest(text: string): GenericAsanaTaskTarget | null {
@@ -294,19 +297,23 @@ export function matchAsanaListShortcut(
   if (isLikelyAsanaWriteRequest(normalized)) return null;
   if (!isLikelyAsanaRequest(normalized, history, memoryEntries)) return null;
 
-  const scope = resolveScope(normalized, memoryEntries);
+  const scope = resolveScope(text, normalized, memoryEntries);
   const dateFilter = parseDateFilter(normalized, timezone, baseDate);
+  const completed = parseCompletedSelection(normalized);
+  const limit = parseLimit(normalized) ?? 50;
   const dateOnlyFollowUp =
     hasRecentAsanaContext(history, memoryEntries) &&
-    !/\btask\b|\bmy tasks\b/.test(normalized) &&
+    !/\btasks?\b|\bmy tasks\b/.test(normalized) &&
     Boolean(dateFilter) &&
     isDateOnlyAsanaFollowUp(normalized);
   const wantsTaskList =
-    /\btask\b/.test(normalized) ||
+    /\btasks?\b/.test(normalized) ||
     /\bmy tasks\b/.test(normalized) ||
     /\bacross all projects\b/.test(normalized) ||
     /\bacross my tasks\b/.test(normalized) ||
     /\bdue\b/.test(normalized) ||
+    /\boverdue\b|\bold tasks?\b|\bbacklog\b|\bstale\b/.test(normalized) ||
+    /\bgo (?:all )?the way back\b|\bback to\b|\bsince\b|\bfrom\b/.test(normalized) ||
     dateOnlyFollowUp;
 
   if (!dateFilter || !wantsTaskList) return null;
@@ -315,11 +322,12 @@ export function matchAsanaListShortcut(
     scope: scope.scope,
     project: scope.project,
     dueOn: dateFilter.dueOn,
+    dueAfter: dateFilter.dueAfter,
     dueBefore: dateFilter.dueBefore,
-    completed: false,
+    completed,
     sortBy: "due",
     sortDirection: "asc",
-    limit: 50,
+    limit,
     label: dateFilter.label,
     emphasizeImportance: /\bimportant\b|\bmain\b/.test(normalized)
   };
@@ -335,7 +343,7 @@ export function matchAsanaLatestTaskShortcut(
   if (!isLikelyAsanaRequest(normalized, history, memoryEntries)) return null;
   if (!/\b(last|latest)\b/.test(normalized)) return null;
 
-  const scope = resolveScope(normalized, memoryEntries);
+  const scope = resolveScope(text, normalized, memoryEntries);
   const asksCompleted = /\bcompleted\b|\bdone\b|\bfinished\b/.test(normalized);
   const asksOpen = /\bincomplete\b|\bopen\b/.test(normalized);
   if (!asksCompleted && !asksOpen) return null;
@@ -498,10 +506,15 @@ function isLikelyAsanaRequest(
   memoryEntries: PromptMemoryEntry[]
 ): boolean {
   if (/\basana\b/.test(normalizedText)) return true;
-  if (/\bmy tasks\b|\btask\b/.test(normalizedText)) return true;
+  if (/\bmy tasks\b|\btasks?\b/.test(normalizedText)) return true;
   if (!hasRecentAsanaContext(history, memoryEntries)) return false;
   return (
     /\bbefore yesterday\b/.test(normalizedText) ||
+    /\b(overdue|old tasks?|backlog|stale|before today|back to|go (?:all )?the way back)\b/.test(
+      normalizedText
+    ) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(normalizedText) ||
+    /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalizedText) ||
     /\b(latest|last)\b/.test(normalizedText) ||
     /\b(apr|april|jan|january|feb|february|mar|march|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/.test(
       normalizedText
@@ -550,6 +563,7 @@ function isDateOnlyAsanaFollowUp(normalizedText: string): boolean {
 }
 
 function resolveScope(
+  text: string,
   normalizedText: string,
   memoryEntries: PromptMemoryEntry[]
 ): { scope: "my_tasks" | "project"; project?: ResolvedAsanaProjectShortcut } {
@@ -562,6 +576,11 @@ function resolveScope(
     return { scope: "project", project };
   }
 
+  const projectName = extractProjectNameFromTaskListText(text);
+  if (projectName) {
+    return { scope: "project", project: { name: projectName } };
+  }
+
   return { scope: "my_tasks" };
 }
 
@@ -569,7 +588,52 @@ function parseDateFilter(
   normalizedText: string,
   timezone: string,
   baseDate: Date
-): { dueOn?: string; dueBefore?: string; label: string } | null {
+): { dueOn?: string; dueAfter?: string; dueBefore?: string; label: string } | null {
+  if (/\b(?:overdue|old tasks?|backlog|stale)\b/.test(normalizedText)) {
+    const lowerBound = parseLowerBoundDateReference(normalizedText, timezone, baseDate);
+    const explicitBefore = parseExplicitBeforeDateReference(normalizedText, timezone, baseDate);
+    return {
+      ...(lowerBound ? { dueAfter: lowerBound.iso } : {}),
+      dueBefore: explicitBefore?.inclusiveBeforeIso ?? relativeDateIso(timezone, -1, baseDate),
+      label: lowerBound
+        ? `overdue from ${lowerBound.displayLabel}`
+        : explicitBefore
+          ? `overdue before ${explicitBefore.displayLabel}`
+          : "overdue"
+    };
+  }
+
+  if (/\bbefore\s+today\b/.test(normalizedText)) {
+    return {
+      dueBefore: relativeDateIso(timezone, -1, baseDate),
+      label: "due before today"
+    };
+  }
+
+  if (/\bbefore yesterday\b/.test(normalizedText)) {
+    return {
+      dueBefore: relativeDateIso(timezone, -2, baseDate),
+      label: "due before yesterday"
+    };
+  }
+
+  const explicitBefore = parseExplicitBeforeDateReference(normalizedText, timezone, baseDate);
+  if (explicitBefore) {
+    return {
+      dueBefore: explicitBefore.inclusiveBeforeIso,
+      label: `due before ${explicitBefore.displayLabel}`
+    };
+  }
+
+  const lowerBound = parseLowerBoundDateReference(normalizedText, timezone, baseDate);
+  if (lowerBound) {
+    return {
+      dueAfter: lowerBound.iso,
+      dueBefore: relativeDateIso(timezone, -1, baseDate),
+      label: `overdue from ${lowerBound.displayLabel}`
+    };
+  }
+
   if (/\btoday\b/.test(normalizedText)) {
     return {
       dueOn: asanaTaskDueDate("today", timezone, baseDate),
@@ -581,13 +645,6 @@ function parseDateFilter(
     return {
       dueOn: asanaTaskDueDate("tomorrow", timezone, baseDate),
       label: "due tomorrow"
-    };
-  }
-
-  if (/\bbefore yesterday\b/.test(normalizedText)) {
-    return {
-      dueBefore: relativeDateIso(timezone, -2, baseDate),
-      label: "due before yesterday"
     };
   }
 
@@ -606,7 +663,81 @@ function parseDateFilter(
     };
   }
 
+  const absoluteDate = parseAbsoluteDateReference(normalizedText, timezone, baseDate);
+  if (absoluteDate) {
+    return {
+      dueOn: absoluteDate.iso,
+      label: `due on ${absoluteDate.displayLabel}`
+    };
+  }
+
   return null;
+}
+
+function parseCompletedSelection(normalizedText: string): boolean | undefined {
+  if (/\bcompleted\b|\bdone\b|\bfinished\b/.test(normalizedText)) return true;
+  return false;
+}
+
+function parseLimit(normalizedText: string): number | undefined {
+  const match = normalizedText.match(/\blimit\s+(\d{1,3})\b/);
+  if (!match?.[1]) return undefined;
+  return Math.min(Math.max(Number.parseInt(match[1], 10), 1), 100);
+}
+
+function parseExplicitBeforeDateReference(
+  normalizedText: string,
+  timezone: string,
+  baseDate: Date
+): { inclusiveBeforeIso: string; displayLabel: string } | null {
+  const match = normalizedText.match(
+    new RegExp(
+      `\\bbefore\\s+(${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN})\\b`
+    )
+  );
+  if (!match?.[1]) return null;
+  const parsed = parseDateReference(match[1], timezone, baseDate);
+  if (!parsed) return null;
+  return {
+    inclusiveBeforeIso: shiftDateIso(parsed.iso, -1),
+    displayLabel: parsed.displayLabel
+  };
+}
+
+function parseLowerBoundDateReference(
+  normalizedText: string,
+  timezone: string,
+  baseDate: Date
+): { iso: string; displayLabel: string } | null {
+  const match = normalizedText.match(
+    new RegExp(
+      `\\b(?:from|since|back\\s+to|go\\s+(?:all\\s+)?the\\s+way\\s+back\\s+to)\\s+(${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN})\\b`
+    )
+  );
+  return match?.[1] ? parseDateReference(match[1], timezone, baseDate) : null;
+}
+
+function parseAbsoluteDateReference(
+  normalizedText: string,
+  timezone: string,
+  baseDate: Date
+): { iso: string; displayLabel: string } | null {
+  const match = normalizedText.match(
+    new RegExp(`\\b(${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN})\\b`)
+  );
+  return match?.[1] ? parseDateReference(match[1], timezone, baseDate) : null;
+}
+
+function parseDateReference(
+  value: string,
+  timezone: string,
+  baseDate: Date
+): { iso: string; displayLabel: string } | null {
+  return (
+    parseMonthDayReference(value, timezone, baseDate) ??
+    parseIsoDateReference(value) ??
+    parseSlashDateReference(value, timezone, baseDate)
+  );
 }
 
 function parseMonthDayReference(
@@ -648,6 +779,37 @@ function parseMonthDayReference(
   };
 }
 
+function parseIsoDateReference(value: string): { iso: string; displayLabel: string } | null {
+  const match = value.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (!match?.[1] || !match[2] || !match[3]) return null;
+  return {
+    iso: `${match[1]}-${match[2]}-${match[3]}`,
+    displayLabel: `${match[1]}-${match[2]}-${match[3]}`
+  };
+}
+
+function parseSlashDateReference(
+  value: string,
+  timezone: string,
+  baseDate: Date
+): { iso: string; displayLabel: string } | null {
+  const match = value.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (!match?.[1] || !match[2]) return null;
+  const month = Number.parseInt(match[1], 10);
+  const day = Number.parseInt(match[2], 10);
+  const currentYear = Number.parseInt(formatInTimeZone(baseDate, timezone, "yyyy"), 10);
+  const year = match[3]
+    ? Number.parseInt(match[3].length === 2 ? `20${match[3]}` : match[3], 10)
+    : currentYear;
+
+  if (month < 1 || month > 12 || day < 1 || day > 31 || !Number.isFinite(year)) return null;
+
+  return {
+    iso: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+    displayLabel: `${month}/${day}/${String(year).slice(-2)}`
+  };
+}
+
 function relativeDateIso(timezone: string, offsetDays: number, baseDate: Date): string {
   const zoned = toZonedTime(baseDate, timezone);
   const day = new Date(zoned);
@@ -673,20 +835,23 @@ function recentAsanaProjects(memoryEntries: PromptMemoryEntry[]): ResolvedAsanaP
   if (!entry || !Array.isArray(entry.value)) return [];
 
   return entry.value
-    .map((value) =>
-      value &&
-      typeof value === "object" &&
-      typeof (value as { projectGid?: unknown }).projectGid === "string"
-        ? {
-            projectGid: (value as { projectGid: string }).projectGid,
-            name:
-              typeof (value as { name?: unknown }).name === "string"
-                ? (value as { name: string }).name
-                : "(Untitled project)"
-          }
-        : null
-    )
-    .filter((value): value is ResolvedAsanaProjectShortcut => Boolean(value));
+    .map((value): ResolvedAsanaProjectShortcut | null => {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        typeof (value as { projectGid?: unknown }).projectGid !== "string"
+      ) {
+        return null;
+      }
+      return {
+        projectGid: (value as { projectGid: string }).projectGid,
+        name:
+          typeof (value as { name?: unknown }).name === "string"
+            ? (value as { name: string }).name
+            : "(Untitled project)"
+      };
+    })
+    .filter((value): value is ResolvedAsanaProjectShortcut => value !== null);
 }
 
 function resolveRecentProjectFromText(
@@ -700,6 +865,31 @@ function resolveRecentProjectFromText(
   if (!candidates.length) return null;
   candidates.sort((left, right) => right.name.length - left.name.length);
   return candidates[0] ?? null;
+}
+
+function extractProjectNameFromTaskListText(text: string): string | null {
+  const patterns = [
+    /\b(?:show|list|check|read)\b[^.?!]*\btasks?\s+in\s+(?:project\s+)?([a-z0-9][a-z0-9 _-]{1,80})\b/i,
+    /\b(?:show|list|check|read)\b[^.?!]*\bproject\s+([a-z0-9][a-z0-9 _-]{1,80})\s+tasks?\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const projectName = cleanupProjectName(match?.[1]);
+    if (projectName) return projectName;
+  }
+
+  return null;
+}
+
+function cleanupProjectName(value: string | undefined): string | null {
+  const cleaned = value
+    ?.replace(
+      /\b(?:due|before|after|from|since|overdue|open|incomplete|completed|complete|sorted|limit)\b.*$/i,
+      ""
+    )
+    .trim();
+  return cleaned || null;
 }
 
 function recentAsanaTasks(memoryEntries: PromptMemoryEntry[]): Array<{

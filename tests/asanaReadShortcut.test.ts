@@ -106,8 +106,9 @@ describe("asana read shortcut", () => {
       )
     ).toMatchObject({
       scope: "my_tasks",
-      dueOn: "2026-04-11",
-      label: "due on Apr 11"
+      dueAfter: "2026-04-11",
+      dueBefore: "2026-04-22",
+      label: "overdue from Apr 11"
     });
 
     expect(
@@ -122,6 +123,127 @@ describe("asana read shortcut", () => {
       scope: "my_tasks",
       dueBefore: "2026-04-21",
       label: "due before yesterday"
+    });
+  });
+
+  it("matches overdue, explicit before-date, and lower-bound Asana list shortcuts", () => {
+    const recentAsanaContext = [
+      {
+        key: "recent_asana_projects",
+        value: [
+          { projectGid: "project_1", name: "Scanis-OLD" },
+          { projectGid: "project_2", name: "School" }
+        ],
+        updatedAt: new Date("2026-05-02T22:00:00.000Z")
+      }
+    ];
+    const baseDate = new Date("2026-05-02T22:00:00.000Z");
+
+    expect(
+      matchAsanaListShortcut(
+        "list all open Asana My Tasks due before today, sorted oldest first, limit 50",
+        [],
+        recentAsanaContext as any,
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "my_tasks",
+      completed: false,
+      dueBefore: "2026-05-01",
+      limit: 50,
+      label: "due before today"
+    });
+
+    expect(
+      matchAsanaListShortcut(
+        "show open Asana tasks overdue before 2026-05-02 across all projects",
+        [],
+        recentAsanaContext as any,
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "my_tasks",
+      completed: false,
+      dueBefore: "2026-05-01",
+      label: "overdue before 2026-05-02"
+    });
+
+    expect(
+      matchAsanaListShortcut(
+        "there should be around 20+ go all the way back to 2/14/26",
+        [{ role: "assistant", content: "Here are open Asana tasks" }],
+        recentAsanaContext as any,
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "my_tasks",
+      completed: false,
+      dueAfter: "2026-02-14",
+      dueBefore: "2026-05-01",
+      label: "overdue from 2/14/26"
+    });
+
+    expect(
+      matchAsanaListShortcut(
+        "show open tasks in Scanis-OLD due before today",
+        [],
+        recentAsanaContext as any,
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "project",
+      project: { projectGid: "project_1", name: "Scanis-OLD" },
+      completed: false,
+      dueBefore: "2026-05-01"
+    });
+
+    expect(
+      matchAsanaListShortcut(
+        "show open tasks in Scanis-OLD due before today",
+        [],
+        [],
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "project",
+      project: { name: "Scanis-OLD" },
+      completed: false,
+      dueBefore: "2026-05-01"
+    });
+
+    expect(
+      matchAsanaListShortcut(
+        "show completed Asana tasks due on 2026-02-14",
+        [],
+        recentAsanaContext as any,
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "my_tasks",
+      completed: true,
+      dueOn: "2026-02-14",
+      label: "due on 2026-02-14"
+    });
+
+    expect(
+      matchAsanaListShortcut(
+        "show Asana tasks on 2026-02-14",
+        [],
+        recentAsanaContext as any,
+        "America/New_York",
+        baseDate
+      )
+    ).toMatchObject({
+      scope: "my_tasks",
+      completed: false,
+      dueOn: "2026-02-14",
+      label: "due on 2026-02-14"
     });
   });
 
