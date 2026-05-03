@@ -361,4 +361,37 @@ describe("asana read shortcut", () => {
       )
     ).toContain("Latest open Asana task:");
   });
+
+  it("formats completed lists and explicit display limits correctly", () => {
+    const tasks = Array.from({ length: 25 }, (_, index) => ({
+      gid: `task_${index + 1}`,
+      name: `task ${index + 1}`,
+      completed: true,
+      dueOn: "2026-02-14"
+    }));
+
+    expect(
+      formatScopedAsanaTaskList(tasks.slice(0, 1), {
+        label: "due on 2026-02-14",
+        emptyLabel: "None",
+        completed: true
+      })
+    ).toContain("Here are the completed Asana tasks due on 2026-02-14:");
+
+    const defaultDisplay = formatScopedAsanaTaskList(tasks, {
+      label: "due before today",
+      emptyLabel: "None"
+    });
+    expect(defaultDisplay).toContain("20. task 20");
+    expect(defaultDisplay).not.toContain("21. task 21");
+    expect(defaultDisplay).toContain("Showing first 20 of 25 returned tasks.");
+
+    const explicitDisplay = formatScopedAsanaTaskList(tasks, {
+      label: "due before today",
+      emptyLabel: "None",
+      displayLimit: 50
+    });
+    expect(explicitDisplay).toContain("25. task 25");
+    expect(explicitDisplay).not.toContain("Showing first");
+  });
 });

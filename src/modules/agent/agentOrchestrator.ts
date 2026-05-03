@@ -806,8 +806,10 @@ export class AgentOrchestrator {
         await replyToUser(
           formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
             label: asanaListShortcut.label,
-            emptyLabel: `I don't see open Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
+            emptyLabel: `I don't see ${asanaListShortcut.completed ? "completed" : "open"} Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
             scopeName: asanaListShortcut.project?.name,
+            completed: asanaListShortcut.completed,
+            displayLimit: asanaListShortcut.requestedLimit ?? 20,
             emphasizeImportance: asanaListShortcut.emphasizeImportance
           })
         );

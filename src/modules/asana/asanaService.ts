@@ -510,6 +510,17 @@ export class AsanaService {
     return normalizeTask(data);
   }
 
+  async addTaskToProject(taskGid: string, projectGid: string): Promise<void> {
+    await this.request<any>(`/tasks/${taskGid}/addProject`, {
+      method: "POST",
+      body: {
+        data: {
+          project: projectGid
+        }
+      }
+    });
+  }
+
   async updateTask(input: {
     taskGid: string;
     name?: string;

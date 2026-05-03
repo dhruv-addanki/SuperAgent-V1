@@ -21,6 +21,7 @@ export interface AsanaListShortcut {
   sortBy?: "due" | "createdAt" | "modifiedAt" | "completedAt";
   sortDirection?: "asc" | "desc";
   limit: number;
+  requestedLimit?: number;
   label: string;
   emphasizeImportance?: boolean;
 }
@@ -300,7 +301,8 @@ export function matchAsanaListShortcut(
   const scope = resolveScope(text, normalized, memoryEntries);
   const dateFilter = parseDateFilter(normalized, timezone, baseDate);
   const completed = parseCompletedSelection(normalized);
-  const limit = parseLimit(normalized) ?? 50;
+  const requestedLimit = parseLimit(normalized);
+  const limit = requestedLimit ?? 50;
   const dateOnlyFollowUp =
     hasRecentAsanaContext(history, memoryEntries) &&
     !/\btasks?\b|\bmy tasks\b/.test(normalized) &&
@@ -328,6 +330,7 @@ export function matchAsanaListShortcut(
     sortBy: "due",
     sortDirection: "asc",
     limit,
+    requestedLimit,
     label: dateFilter.label,
     emphasizeImportance: /\bimportant\b|\bmain\b/.test(normalized)
   };
@@ -404,21 +407,30 @@ export function formatScopedAsanaTaskList(
     label: string;
     emptyLabel: string;
     scopeName?: string;
+    completed?: boolean;
+    displayLimit?: number;
     emphasizeImportance?: boolean;
   }
 ): string {
   if (!tasks.length) return input.emptyLabel;
 
+  const statusLabel = input.completed ? "completed" : "open";
   const intro = input.emphasizeImportance
-    ? `Here are the open Asana tasks I can see ${input.label}${input.scopeName ? ` in ${input.scopeName}` : ""}. I can't reliably rank importance from Asana alone, so I'm listing them with context:`
-    : `Here are the open Asana tasks ${input.label}${input.scopeName ? ` in ${input.scopeName}` : ""}:`;
+    ? `Here are the ${statusLabel} Asana tasks I can see ${input.label}${input.scopeName ? ` in ${input.scopeName}` : ""}. I can't reliably rank importance from Asana alone, so I'm listing them with context:`
+    : `Here are the ${statusLabel} Asana tasks ${input.label}${input.scopeName ? ` in ${input.scopeName}` : ""}:`;
 
-  const body = tasks
-    .slice(0, 20)
+  const displayLimit = Math.min(Math.max(input.displayLimit ?? 20, 1), 50);
+  const visibleTasks = tasks.slice(0, displayLimit);
+  const body = visibleTasks
     .map((task, index) => `${index + 1}. ${formatTaskLine(task)}`)
     .join("\n");
 
-  return `${intro}\n\n${body}`;
+  const truncation =
+    tasks.length > visibleTasks.length
+      ? `\n\nShowing first ${visibleTasks.length} of ${tasks.length} returned tasks.`
+      : "";
+
+  return `${intro}\n\n${body}${truncation}`;
 }
 
 export function formatLatestAsanaTaskReply(

@@ -9,6 +9,7 @@ const listProjectTasksMock = vi.fn();
 const searchTasksMock = vi.fn();
 const getTaskMock = vi.fn();
 const createTaskMock = vi.fn();
+const addTaskToProjectMock = vi.fn();
 const updateTaskMock = vi.fn();
 const deleteTaskMock = vi.fn();
 
@@ -23,6 +24,7 @@ vi.mock("../src/modules/asana/asanaService", () => ({
     searchTasks: searchTasksMock,
     getTask: getTaskMock,
     createTask: createTaskMock,
+    addTaskToProject: addTaskToProjectMock,
     updateTask: updateTaskMock,
     deleteTask: deleteTaskMock
   }))
@@ -163,6 +165,7 @@ describe("tool executor Asana flows", () => {
       workspaceName: "Product",
       assigneeName: "Dhruv"
     });
+    addTaskToProjectMock.mockResolvedValue(undefined);
     updateTaskMock.mockImplementation(async (input) => ({
       gid: input.taskGid,
       name: "Ship Asana integration",
@@ -393,6 +396,118 @@ describe("tool executor Asana flows", () => {
       assigneeGid: "user_asana_1"
     });
     expect(createInput).not.toHaveProperty("dueOn");
+  });
+
+  it("does not treat due/project words inside a task title as due-date instructions", async () => {
+    listProjectsMock.mockResolvedValueOnce([
+      {
+        gid: "project_old",
+        name: "Scanis-OLD",
+        workspaceGid: "workspace_1",
+        workspaceName: "My workspace"
+      }
+    ]);
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        name: "no due project test",
+        dueOn: "2026-05-04",
+        assigneeGid: "me"
+      },
+      makeContext("add a task called no due project test to project Scanis-OLD")
+    );
+
+    expect(result.ok).toBe(true);
+    const createInput = createTaskMock.mock.calls[0]?.[0];
+    expect(createInput).toMatchObject({
+      name: "no due project test",
+      projectGids: ["project_old"],
+      assigneeGid: "user_asana_1"
+    });
+    expect(createInput).not.toHaveProperty("dueOn");
+  });
+
+  it("keeps due dates that are stated outside the task title while recovering project names", async () => {
+    listProjectsMock.mockResolvedValueOnce([
+      {
+        gid: "project_old",
+        name: "Scanis-OLD",
+        workspaceGid: "workspace_1",
+        workspaceName: "My workspace"
+      }
+    ]);
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        name: "no due project test",
+        dueOn: "2026-05-04",
+        assigneeGid: "me"
+      },
+      makeContext("add a task called no due project test to project Scanis-OLD due tomorrow")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "no due project test",
+        dueOn: "2026-05-04",
+        projectGids: ["project_old"],
+        assigneeGid: "user_asana_1"
+      })
+    );
+  });
+
+  it("verifies project membership after create and returns a backend-authored summary", async () => {
+    listProjectsMock.mockResolvedValueOnce([
+      {
+        gid: "project_business",
+        name: "Business",
+        workspaceGid: "workspace_1",
+        workspaceName: "My workspace"
+      }
+    ]);
+    createTaskMock.mockResolvedValueOnce({
+      gid: "task_business",
+      name: "due diligence project review",
+      completed: false,
+      workspaceGid: "workspace_1",
+      workspaceName: "My workspace",
+      assigneeGid: "user_asana_1",
+      assigneeName: "Dhruv"
+    });
+    getTaskMock.mockResolvedValueOnce({
+      gid: "task_business",
+      name: "due diligence project review",
+      completed: false,
+      workspaceGid: "workspace_1",
+      workspaceName: "My workspace",
+      assigneeGid: "user_asana_1",
+      assigneeName: "Dhruv",
+      projects: [{ gid: "project_business", name: "Business" }]
+    });
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        name: "due diligence project review",
+        dueOn: "2026-05-04",
+        assigneeGid: "me"
+      },
+      makeContext("add a task called due diligence project review to project Business")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(addTaskToProjectMock).toHaveBeenCalledWith("task_business", "project_business");
+    expect(result.stopAfterTool).toBe(true);
+    expect(result.userMessage).toContain("Created: due diligence project review");
+    expect(result.userMessage).toContain("Project: Business");
+    expect(result.userMessage).toContain("Due: none");
+    expect(result.userMessage).toContain("Assignee: Dhruv");
   });
 
   it("normalizes null-like assignee strings to the connected Asana user", async () => {

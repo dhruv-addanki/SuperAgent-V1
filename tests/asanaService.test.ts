@@ -311,6 +311,19 @@ describe("asana service", () => {
     expect(requestBody.data).not.toHaveProperty("due_on");
   });
 
+  it("can attach a created task to a project after creation", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: {} })
+    });
+
+    await new AsanaService("token").addTaskToProject("task_1", "project_1");
+
+    expect(fetchMock.mock.calls[0][0].toString()).toContain("/tasks/task_1/addProject");
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    expect(requestBody.data).toEqual({ project: "project_1" });
+  });
+
   it("clears only the active due field when removing a due date on update", async () => {
     fetchMock
       .mockResolvedValueOnce({

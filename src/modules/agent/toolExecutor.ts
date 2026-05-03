@@ -99,18 +99,32 @@ const LAST_FAILED_ASANA_BULK_UPDATE_KEY = "last_failed_asana_bulk_update";
 const ASANA_BULK_MAX_TASKS = 25;
 const ASANA_BULK_RETRY_ATTEMPTS = 2;
 const ASANA_BULK_RETRY_DELAY_MS = 25;
+const ASANA_NATURAL_DATE_TOKEN =
+  "(?:today|tomorrow|tmr|tmrw|tonight|yesterday|\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?|\\d{4}-\\d{2}-\\d{2}|(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\\s+\\d{1,2}(?:st|nd|rd|th)?|(?:next|this)\\s+(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|week|month))";
+const ASANA_NAMED_TASK_TITLE_PATTERN = new RegExp(
+  `\\b(?:called|named|titled)\\s+.+?(?=\\s+(?:to|in|inside|under|for)\\s+(?:the\\s+)?(?:asana\\s+)?(?:project\\b|[a-z0-9][a-z0-9 _-]{1,80}\\s+project\\b)|\\s+(?:due|deadline|by|on|before|after)\\s+${ASANA_NATURAL_DATE_TOKEN}\\b|\\s+with\\s+no\\s+(?:due\\s+date|deadline)\\b|[.!?]|$)`,
+  "gi"
+);
+
+function asanaInstructionTextWithoutNamedTaskTitle(latestUserMessage: string): string {
+  return latestUserMessage.replace(ASANA_NAMED_TASK_TITLE_PATTERN, "");
+}
 
 function requestsNoDueDate(latestUserMessage: string): boolean {
-  const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'");
+  const normalized = asanaInstructionTextWithoutNamedTaskTitle(latestUserMessage)
+    .toLowerCase()
+    .replace(/[’]/g, "'");
   return NO_DUE_DATE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 function mentionsExplicitDueTime(latestUserMessage: string): boolean {
-  return TIME_OF_DAY_PATTERN.test(latestUserMessage);
+  return TIME_OF_DAY_PATTERN.test(asanaInstructionTextWithoutNamedTaskTitle(latestUserMessage));
 }
 
 function mentionsDueDate(latestUserMessage: string): boolean {
-  const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'");
+  const normalized = asanaInstructionTextWithoutNamedTaskTitle(latestUserMessage)
+    .toLowerCase()
+    .replace(/[’]/g, "'");
   return (
     /\b(due|deadline|today|tomorrow|tmr|tmrw|tonight|yesterday)\b/.test(normalized) ||
     /\b(?:by|on|before|after)\s+(?:\d{1,2}\/\d{1,2}|\d{4}-\d{2}-\d{2})\b/.test(normalized) ||
@@ -121,6 +135,31 @@ function mentionsDueDate(latestUserMessage: string): boolean {
       normalized
     )
   );
+}
+
+function extractAsanaCreateProjectNames(latestUserMessage: string): string[] {
+  const source = latestUserMessage.replace(/[’]/g, "'");
+  const patterns = [
+    /\b(?:to|in|inside|under|for)\s+(?:the\s+)?(?:asana\s+)?project\s+([a-z0-9][a-z0-9 _-]{0,80}?)(?=\s+\b(?:due|by|on|before|after|with|and)\b|[.!?]|$)/gi,
+    /\b(?:to|in|inside|under|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 _-]{0,80}?)\s+project\b/gi
+  ];
+  const names: string[] = [];
+
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const name = cleanupAsanaProjectName(match[1] ?? "");
+      if (name) names.push(name);
+    }
+  }
+
+  return [...new Set(names.map((name) => name.trim()).filter(Boolean))];
+}
+
+function cleanupAsanaProjectName(value: string): string {
+  return value
+    .replace(/\s+\b(?:due|by|on|before|after|with|and)\b.*$/i, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim();
 }
 
 function shouldKeepAsanaCreateProjectContext(input: any, latestUserMessage: string): boolean {
@@ -135,16 +174,18 @@ function shouldKeepAsanaCreateProjectContext(input: any, latestUserMessage: stri
 
   const normalized = latestUserMessage.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
   if (/\b(same|that|this|current|previous)\s+project\b/.test(normalized)) return true;
-  if (/\b(?:in|inside|under)\s+(?:the\s+)?(?:asana\s+)?project\b/.test(normalized)) return true;
+  if (/\b(?:in|inside|under|to|for)\s+(?:the\s+)?(?:asana\s+)?project\b/.test(normalized)) {
+    return true;
+  }
 
   const projectLabels = [...projectNames, ...projectGids];
   return projectLabels.some((name) => {
     const normalizedName = name.toLowerCase().replace(/\s+/g, " ").trim();
     if (!normalizedName) return false;
     const escapedName = escapeRegExp(normalizedName);
-    return new RegExp(`\\b(?:in|inside|under|to|for)\\s+(?:the\\s+)?${escapedName}\\b`).test(
-      normalized
-    );
+    return new RegExp(
+      `\\b(?:in|inside|under|to|for)\\s+(?:the\\s+)?(?:asana\\s+)?(?:project\\s+)?${escapedName}\\b`
+    ).test(normalized);
   });
 }
 
@@ -179,6 +220,14 @@ function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMess
   }
 
   const normalized = { ...input };
+  if (toolName === "asana_create_task") {
+    const recoveredProjectNames = extractAsanaCreateProjectNames(latestUserMessage);
+    if (recoveredProjectNames.length) {
+      normalized.projectNames = recoveredProjectNames;
+      delete normalized.projectGids;
+    }
+  }
+
   const hasDueOn = Object.prototype.hasOwnProperty.call(normalized, "dueOn");
   const hasDueAt = Object.prototype.hasOwnProperty.call(normalized, "dueAt");
 
@@ -1046,11 +1095,12 @@ export class ToolExecutor {
   private async createAsanaTaskWithAssignedFallback(
     service: AsanaService,
     input: any
-  ): Promise<{ data: AsanaTaskSummary; authPath: string }> {
+  ): Promise<{ data: AsanaTaskSummary; authPath: string; writeService: AsanaService }> {
     try {
       return {
         data: await service.createTask(input),
-        authPath: "oauth"
+        authPath: "oauth",
+        writeService: service
       };
     } catch (error) {
       if (!shouldUseAsanaAssignedWriteFallback(error, input.assigneeGid)) throw error;
@@ -1059,7 +1109,8 @@ export class ToolExecutor {
       if (duplicate) {
         return {
           data: duplicate,
-          authPath: "oauth_duplicate_after_failure"
+          authPath: "oauth_duplicate_after_failure",
+          writeService: service
         };
       }
 
@@ -1069,12 +1120,30 @@ export class ToolExecutor {
       try {
         return {
           data: await fallbackService.createTask(input),
-          authPath: "pat_fallback"
+          authPath: "pat_fallback",
+          writeService: fallbackService
         };
       } catch (fallbackError) {
         throw asanaPatFallbackFailed(error, fallbackError);
       }
     }
+  }
+
+  private async ensureAsanaCreatedTaskProjects(
+    service: AsanaService,
+    task: AsanaTaskSummary,
+    projectGids?: string[]
+  ): Promise<AsanaTaskSummary> {
+    if (!projectGids?.length) return task;
+
+    const missingProjectGids = missingAsanaProjectGids(task, projectGids);
+    if (!missingProjectGids.length) return task;
+
+    for (const projectGid of missingProjectGids) {
+      await service.addTaskToProject(task.gid, projectGid);
+    }
+
+    return service.getTask(task.gid);
   }
 
   private async updateAsanaTaskWithAssignedFallback(
@@ -1754,10 +1823,13 @@ export class ToolExecutor {
             projectGids,
             assigneeGid
           };
-          const { data, authPath } = await this.createAsanaTaskWithAssignedFallback(
-            service,
-            createInput
+          const createResult = await this.createAsanaTaskWithAssignedFallback(service, createInput);
+          const data = await this.ensureAsanaCreatedTaskProjects(
+            createResult.writeService,
+            createResult.data,
+            projectGids
           );
+          const authPath = createResult.authPath;
           await this.rememberRecentAsanaTasks(context.user.id, [data]);
           await this.rememberRecentAsanaProjectsFromTasks(context.user.id, [data]);
           const rememberedWorkspaceGid = data.workspaceGid ?? workspaceGid;
@@ -1775,7 +1847,12 @@ export class ToolExecutor {
             responsePayload: data,
             status: "executed"
           });
-          return { ok: true, data };
+          return {
+            ok: true,
+            data,
+            userMessage: formatAsanaCreatedTaskMessage(data),
+            stopAfterTool: true
+          };
         }
 
         if (toolName === "asana_update_task") {
@@ -2159,6 +2236,36 @@ function matchesAsanaProjectSet(task: AsanaTaskSummary, projectGids: unknown): b
   return projectGids.every((projectGid) =>
     typeof projectGid === "string" ? taskProjectGids.has(projectGid) : false
   );
+}
+
+function missingAsanaProjectGids(task: AsanaTaskSummary, projectGids: string[]): string[] {
+  const taskProjectGids = new Set((task.projects ?? []).map((project) => project.gid));
+  return projectGids.filter((projectGid) => !taskProjectGids.has(projectGid));
+}
+
+function formatAsanaCreatedTaskMessage(task: AsanaTaskSummary): string {
+  const lines = [`Created: ${task.name}`];
+  const projectNames = (task.projects ?? [])
+    .map((project) => project.name)
+    .filter((name): name is string => Boolean(name?.trim()));
+
+  if (projectNames.length) {
+    lines.push(`Project: ${projectNames.join(", ")}`);
+  }
+
+  if (task.dueOn) {
+    lines.push(`Due: ${task.dueOn}`);
+  } else if (task.dueAt) {
+    lines.push(`Due: ${task.dueAt}`);
+  } else {
+    lines.push("Due: none");
+  }
+
+  if (task.assigneeName) {
+    lines.push(`Assignee: ${task.assigneeName}`);
+  }
+
+  return lines.join("\n");
 }
 
 function isAsanaSelfOrEmptyAssignee(value: string): boolean {

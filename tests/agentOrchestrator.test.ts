@@ -1449,14 +1449,12 @@ describe("agent orchestrator", () => {
       .spyOn(ToolExecutor.prototype, "executeToolCall")
       .mockResolvedValue({
         ok: true,
-        data: [
-          {
-            gid: "task_1",
-            name: "Old task",
-            completed: false,
-            dueOn: "2026-02-14"
-          }
-        ]
+        data: Array.from({ length: 25 }, (_, index) => ({
+          gid: `task_${index + 1}`,
+          name: `Old task ${index + 1}`,
+          completed: false,
+          dueOn: "2026-02-14"
+        }))
       });
 
     const prisma = {
@@ -1517,7 +1515,11 @@ describe("agent orchestrator", () => {
     expect(runResponseLoopMock).not.toHaveBeenCalled();
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      expect.stringContaining("Old task")
+      expect.stringContaining("25. Old task 25")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.not.stringContaining("Showing first")
     );
   });
 
@@ -1728,6 +1730,10 @@ describe("agent orchestrator", () => {
       })
     );
     expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Here are the completed Asana tasks due on 2026-02-14:")
+    );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       expect.stringContaining("Completed old task")
