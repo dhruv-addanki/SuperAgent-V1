@@ -12,4 +12,10 @@ describe("assistant message text", () => {
       "Thanks, ready when you are."
     );
   });
+
+  it("preserves newline bullet lists", () => {
+    expect(normalizeAssistantMessageForUser("Created:\n- First task\n- Second task")).toBe(
+      "Created:\n- First task\n- Second task"
+    );
+  });
 });

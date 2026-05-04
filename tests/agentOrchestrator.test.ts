@@ -2836,6 +2836,111 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("creates multiple voice-style Asana tasks instead of only the corrected first one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-04T12:00:00.000Z"));
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockImplementation(async (_toolName: string, rawInput: any) => ({
+        ok: true,
+        data: {
+          gid: `created_${rawInput.name}`,
+          name: rawInput.name,
+          dueOn: rawInput.dueOn,
+          assigneeName: "Dhruv Addanki",
+          completed: false
+        }
+      }));
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    const transcript =
+      "Add some tasks due today. First added a task called call Verizon guy actually change that to text Verizon guy. Another task called Finish Noval notes and post story another task called script video. Another task called. Call Rohan yeah";
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: transcript
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledTimes(4);
+    expect(executeToolCallSpy).toHaveBeenNthCalledWith(
+      1,
+      "asana_create_task",
+      { name: "text Verizon guy", dueOn: "2026-05-04" },
+      expect.objectContaining({ latestUserMessage: transcript }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).toHaveBeenNthCalledWith(
+      2,
+      "asana_create_task",
+      { name: "Finish Noval notes and post story", dueOn: "2026-05-04" },
+      expect.objectContaining({ latestUserMessage: transcript }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).toHaveBeenNthCalledWith(
+      3,
+      "asana_create_task",
+      { name: "script video", dueOn: "2026-05-04" },
+      expect.objectContaining({ latestUserMessage: transcript }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).toHaveBeenNthCalledWith(
+      4,
+      "asana_create_task",
+      { name: "Call Rohan", dueOn: "2026-05-04" },
+      expect.objectContaining({ latestUserMessage: transcript }),
+      { force: true }
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      [
+        "Created 4 Asana tasks due 2026-05-04:",
+        "- text Verizon guy (assignee Dhruv Addanki)",
+        "- Finish Noval notes and post story (assignee Dhruv Addanki)",
+        "- script video (assignee Dhruv Addanki)",
+        "- Call Rohan (assignee Dhruv Addanki)"
+      ].join("\n")
+    );
+  });
+
   it("completes a single listed Asana task without confirmation", async () => {
     const executeToolCallSpy = vi
       .spyOn(ToolExecutor.prototype, "executeToolCall")

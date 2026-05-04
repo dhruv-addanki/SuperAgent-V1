@@ -41,6 +41,13 @@ export interface AsanaListThenCompleteShortcut {
   listText: string;
 }
 
+export interface AsanaMultiCreateShortcut {
+  tasks: Array<{
+    name: string;
+    dueOn?: string;
+  }>;
+}
+
 export interface AsanaBulkCompleteClarification {
   taskCount: number;
   projectName?: string;
@@ -186,6 +193,29 @@ export function matchAsanaBulkRetryRequest(
   const normalized = normalize(text);
   if (!/\b(?:try again|retry|rerun|run it again)\b/.test(normalized)) return false;
   return Boolean(memoryEntries.find((entry) => entry.key === "last_failed_asana_bulk_update"));
+}
+
+export function matchAsanaMultiCreateRequest(
+  text: string,
+  timezone: string,
+  baseDate = new Date()
+): AsanaMultiCreateShortcut | null {
+  const normalized = normalize(text);
+  const asksCreateTasks =
+    /\b(?:add|create|make|set up)\b[^.?!]*\btasks?\b/.test(normalized) ||
+    /\btasks?\b[^.?!]*\b(?:add|create|make|set up)\b/.test(normalized);
+  if (!asksCreateTasks) return null;
+
+  const names = extractNamedTaskCreations(text);
+  if (names.length < 2) return null;
+
+  const dueOn = parseCreateDueOn(normalized, timezone, baseDate);
+  return {
+    tasks: names.slice(0, 10).map((name) => ({
+      name,
+      ...(dueOn ? { dueOn } : {})
+    }))
+  };
 }
 
 export function lastVisibleAsanaTaskList(
@@ -641,7 +671,64 @@ export function formatAsanaTodayAndLatestOpenReply(
 }
 
 function normalize(text: string): string {
-  return text.trim().toLowerCase();
+  return text.trim().toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
+}
+
+function extractNamedTaskCreations(text: string): string[] {
+  const markerPattern =
+    /\b(?:first\s+|another\s+|and\s+another\s+|one\s+more\s+|also\s+)?(?:add(?:ed)?\s+)?(?:a\s+)?task\s+(?:called|named|titled)\s*[:.,-]?\s*/gi;
+  const matches = Array.from(text.matchAll(markerPattern));
+  if (matches.length < 2) return [];
+
+  const names: string[] = [];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]!;
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? text.length;
+    const segment = text.slice(start, end);
+    const name = cleanupCreatedTaskName(resolveCorrectionInCreatedTaskName(segment));
+    if (name) names.push(name);
+  }
+
+  return names;
+}
+
+function resolveCorrectionInCreatedTaskName(segment: string): string {
+  const correction = segment.match(
+    /\b(?:actually|no|wait|sorry)\s+(?:change|changed|switch|make|rename|name)\s+(?:that|it|this)?\s*(?:to|as)?\s+(.+)$/i
+  );
+  return correction?.[1] ?? segment;
+}
+
+function cleanupCreatedTaskName(value: string): string | null {
+  const cleaned = value
+    .replace(/\b(?:due|deadline|by|on|before|after)\s+.*$/i, "")
+    .replace(/\b(?:please|thanks?|thank you|yeah|yep|ok|okay|um|uh)\b/gi, " ")
+    .replace(/^["'`.,:;\s-]+|["'`.,:;\s-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned.length < 2) return null;
+  return cleaned;
+}
+
+function parseCreateDueOn(
+  normalizedText: string,
+  timezone: string,
+  baseDate: Date
+): string | undefined {
+  if (/\b(?:no due date|without (?:a |any )?due date|no deadline)\b/.test(normalizedText)) {
+    return undefined;
+  }
+  if (/\bdue\s+(?:today|tonight)\b|\btasks?\s+due\s+(?:today|tonight)\b/.test(normalizedText)) {
+    return asanaTaskDueDate("today", timezone, baseDate);
+  }
+  if (
+    /\bdue\s+(?:tomorrow|tmr|tmrw)\b|\btasks?\s+due\s+(?:tomorrow|tmr|tmrw)\b/.test(normalizedText)
+  ) {
+    return asanaTaskDueDate("tomorrow", timezone, baseDate);
+  }
+  const isoDue = normalizedText.match(/\bdue\s+(\d{4}-\d{2}-\d{2})\b/);
+  return isoDue?.[1];
 }
 
 function isLikelyAsanaWriteRequest(normalizedText: string): boolean {

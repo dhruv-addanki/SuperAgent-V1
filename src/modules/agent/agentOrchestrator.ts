@@ -64,6 +64,7 @@ import {
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
   matchAsanaListThenCompleteRequest,
+  matchAsanaMultiCreateRequest,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
@@ -314,6 +315,39 @@ export class AgentOrchestrator {
         (firstInteraction && isGreetingOnly(preparedInput.text) && !setupStatus.hasAnyConnected)
       ) {
         await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
+        return;
+      }
+
+      const asanaMultiCreate = shouldUseTextShortcuts
+        ? matchAsanaMultiCreateRequest(preparedInput.text, user.timezone)
+        : null;
+      if (asanaMultiCreate) {
+        const asanaStatus = setupStatus.integrations.find(
+          (integration) => integration.key === "asana"
+        );
+        if (!integrationConnected(setupStatus, "asana") && asanaStatus) {
+          await replyToUser(formatMissingIntegrationForWhatsApp(asanaStatus), {
+            allowSetupHint: false
+          });
+          return;
+        }
+
+        const asanaMessage = await this.executeAsanaMultiCreate({
+          tasks: asanaMultiCreate.tasks,
+          user,
+          conversation,
+          latestUserMessage: preparedInput.text
+        });
+
+        if (hasNonAsanaCompoundWork(intentRoute)) {
+          const remainingMessage = await runModelFallback(
+            `\n\nBackend already created these Asana tasks from this request: ${asanaMessage}\nDo not call any Asana tools. Handle only the remaining non-Asana parts of the user's message.`
+          );
+          await replyToUser(compactReplySections([asanaMessage, remainingMessage]));
+          return;
+        }
+
+        await replyToUser(asanaMessage);
         return;
       }
 
@@ -1169,6 +1203,46 @@ export class AgentOrchestrator {
     });
   }
 
+  private async executeAsanaMultiCreate(input: {
+    tasks: Array<{ name: string; dueOn?: string }>;
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<string> {
+    const created: Array<{ name: string; dueOn?: string; assigneeName?: string }> = [];
+    const failed: Array<{ name: string; message: string }> = [];
+
+    for (const task of input.tasks) {
+      const result = await this.toolExecutor.executeToolCall(
+        "asana_create_task",
+        task,
+        {
+          user: input.user,
+          conversation: input.conversation,
+          latestUserMessage: input.latestUserMessage
+        },
+        { force: true }
+      );
+
+      if (!result.ok) {
+        failed.push({
+          name: task.name,
+          message: result.userMessage ?? "I couldn't create this Asana task."
+        });
+        continue;
+      }
+
+      const data = result.data as AsanaTaskSummary | undefined;
+      created.push({
+        name: data?.name ?? task.name,
+        dueOn: data?.dueOn ?? task.dueOn,
+        assigneeName: data?.assigneeName
+      });
+    }
+
+    return formatAsanaMultiCreateMessage(created, failed);
+  }
+
   private async executeConcreteAsanaCompletion(input: {
     tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>;
     user: User;
@@ -1847,6 +1921,42 @@ function compactReplySections(sections: Array<string | undefined | null>): strin
     .map((section) => section?.trim())
     .filter((section): section is string => Boolean(section) && section !== "Done.")
     .join("\n\n");
+}
+
+function formatAsanaMultiCreateMessage(
+  created: Array<{ name: string; dueOn?: string; assigneeName?: string }>,
+  failed: Array<{ name: string; message: string }>
+): string {
+  const sections: string[] = [];
+  if (created.length) {
+    const dueDates = new Set(created.map((task) => task.dueOn).filter(Boolean));
+    const sharedDue = dueDates.size === 1 ? Array.from(dueDates)[0] : undefined;
+    sections.push(
+      [
+        `Created ${created.length} Asana task${created.length === 1 ? "" : "s"}${sharedDue ? ` due ${sharedDue}` : ""}:`,
+        ...created.map((task) => {
+          const details = [
+            !sharedDue && task.dueOn ? `due ${task.dueOn}` : undefined,
+            task.assigneeName ? `assignee ${task.assigneeName}` : undefined
+          ]
+            .filter(Boolean)
+            .join(" • ");
+          return `- ${task.name}${details ? ` (${details})` : ""}`;
+        })
+      ].join("\n")
+    );
+  }
+
+  if (failed.length) {
+    sections.push(
+      [
+        `Couldn't create ${failed.length} Asana task${failed.length === 1 ? "" : "s"}:`,
+        ...failed.map((task) => `- ${task.name}: ${task.message}`)
+      ].join("\n")
+    );
+  }
+
+  return sections.join("\n\n") || "I couldn't identify any Asana tasks to create.";
 }
 
 function formatConcreteAsanaCompletionMessage(

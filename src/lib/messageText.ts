@@ -1,7 +1,7 @@
 export function normalizeAssistantMessageForUser(message: string): string {
   return message
     .replace(/\s*[—–]\s*/g, ", ")
-    .replace(/([^\n])\s+-\s+([^\n])/g, "$1, $2")
+    .replace(/([^\n])[ \t]+-[ \t]+([^\n])/g, "$1, $2")
     .replace(/-{3,}/g, ", ")
     .replace(/\s+([,.;:!?])/g, "$1")
     .replace(/[ \t]+\n/g, "\n")

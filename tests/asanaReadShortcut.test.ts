@@ -10,6 +10,7 @@ import {
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
   matchAsanaListThenCompleteRequest,
+  matchAsanaMultiCreateRequest,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
@@ -67,6 +68,38 @@ describe("asana read shortcut", () => {
         completed: false,
         dueBefore: "2026-05-02"
       }
+    });
+  });
+
+  it("extracts multiple voice-style Asana task creations with corrections", () => {
+    const shortcut = matchAsanaMultiCreateRequest(
+      "Add some tasks due today. First added a task called call Verizon guy actually change that to text Verizon guy. Another task called Finish Noval notes and post story another task called script video. Another task called. Call Rohan yeah",
+      "America/New_York",
+      new Date("2026-05-04T12:00:00.000Z")
+    );
+
+    expect(shortcut).toEqual({
+      tasks: [
+        { name: "text Verizon guy", dueOn: "2026-05-04" },
+        { name: "Finish Noval notes and post story", dueOn: "2026-05-04" },
+        { name: "script video", dueOn: "2026-05-04" },
+        { name: "Call Rohan", dueOn: "2026-05-04" }
+      ]
+    });
+  });
+
+  it("does not treat mutation words inside task names as non-create commands", () => {
+    const shortcut = matchAsanaMultiCreateRequest(
+      "Create tasks due tomorrow: task called complete GUI homework. another task called delete unused app trial",
+      "America/New_York",
+      new Date("2026-05-04T12:00:00.000Z")
+    );
+
+    expect(shortcut).toEqual({
+      tasks: [
+        { name: "complete GUI homework", dueOn: "2026-05-05" },
+        { name: "delete unused app trial", dueOn: "2026-05-05" }
+      ]
     });
   });
 
