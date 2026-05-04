@@ -63,10 +63,12 @@ import {
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchAsanaListThenCompleteRequest,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
   matchListedAsanaBulkCompleteRequest,
+  type AsanaListShortcut,
   resolveConcreteAsanaCompletionTarget
 } from "./asanaReadShortcut";
 import {
@@ -312,6 +314,41 @@ export class AgentOrchestrator {
         (firstInteraction && isGreetingOnly(preparedInput.text) && !setupStatus.hasAnyConnected)
       ) {
         await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
+        return;
+      }
+
+      const asanaListThenComplete = shouldUseTextShortcuts
+        ? matchAsanaListThenCompleteRequest(
+            preparedInput.text,
+            history,
+            memoryEntries,
+            user.timezone
+          )
+        : null;
+      if (asanaListThenComplete && integrationConnected(setupStatus, "asana")) {
+        const listResult = await this.executeAsanaListShortcut({
+          shortcut: asanaListThenComplete.listShortcut,
+          user,
+          conversation,
+          latestUserMessage: preparedInput.text
+        });
+        const asanaMessage = await this.completeFreshAsanaListResult({
+          result: listResult,
+          shortcut: asanaListThenComplete.listShortcut,
+          user,
+          conversation,
+          latestUserMessage: preparedInput.text
+        });
+
+        if (hasNonAsanaCompoundWork(intentRoute)) {
+          const remainingMessage = await runModelFallback(
+            `\n\nBackend already handled the Asana read and completion from this request: ${asanaMessage}\nDo not call any Asana tools. Handle only the remaining non-Asana parts of the user's message.`
+          );
+          await replyToUser(compactReplySections([asanaMessage, remainingMessage]));
+          return;
+        }
+
+        await replyToUser(asanaMessage);
         return;
       }
 
@@ -838,32 +875,12 @@ export class AgentOrchestrator {
         intentRoute.shortcutCandidate === "asana_list" &&
         asanaListShortcut
       ) {
-        const toolName =
-          asanaListShortcut.scope === "project"
-            ? "asana_list_project_tasks"
-            : "asana_list_my_tasks";
-        const result = await this.toolExecutor.executeToolCall(
-          toolName,
-          {
-            ...(asanaListShortcut.project
-              ? asanaListShortcut.project.projectGid
-                ? { projectGid: asanaListShortcut.project.projectGid }
-                : { projectName: asanaListShortcut.project.name }
-              : {}),
-            completed: asanaListShortcut.completed,
-            dueOn: asanaListShortcut.dueOn,
-            dueAfter: asanaListShortcut.dueAfter,
-            dueBefore: asanaListShortcut.dueBefore,
-            limit: asanaListShortcut.limit,
-            sortBy: asanaListShortcut.sortBy,
-            sortDirection: asanaListShortcut.sortDirection
-          },
-          {
-            user,
-            conversation,
-            latestUserMessage: preparedInput.text
-          }
-        );
+        const result = await this.executeAsanaListShortcut({
+          shortcut: asanaListShortcut,
+          user,
+          conversation,
+          latestUserMessage: preparedInput.text
+        });
 
         if (!result.ok) {
           await replyToUser(
@@ -1083,6 +1100,75 @@ export class AgentOrchestrator {
     }
   }
 
+  private async executeAsanaListShortcut(input: {
+    shortcut: AsanaListShortcut;
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<ToolExecutionResult> {
+    const toolName =
+      input.shortcut.scope === "project" ? "asana_list_project_tasks" : "asana_list_my_tasks";
+    return this.toolExecutor.executeToolCall(
+      toolName,
+      {
+        ...(input.shortcut.project
+          ? input.shortcut.project.projectGid
+            ? { projectGid: input.shortcut.project.projectGid }
+            : { projectName: input.shortcut.project.name }
+          : {}),
+        completed: input.shortcut.completed,
+        dueOn: input.shortcut.dueOn,
+        dueAfter: input.shortcut.dueAfter,
+        dueBefore: input.shortcut.dueBefore,
+        limit: input.shortcut.limit,
+        sortBy: input.shortcut.sortBy,
+        sortDirection: input.shortcut.sortDirection
+      },
+      {
+        user: input.user,
+        conversation: input.conversation,
+        latestUserMessage: input.latestUserMessage
+      }
+    );
+  }
+
+  private async completeFreshAsanaListResult(input: {
+    result: ToolExecutionResult;
+    shortcut: AsanaListShortcut;
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<string> {
+    if (!input.result.ok) {
+      return (
+        input.result.userMessage ??
+        "I couldn't load the Asana tasks to complete. No tasks were changed."
+      );
+    }
+
+    const tasks = ((input.result.data as AsanaTaskSummary[] | undefined) ?? []).filter(
+      (task) => task.gid
+    );
+    if (!tasks.length) {
+      return `No matching Asana tasks to complete${input.shortcut.project ? ` in ${input.shortcut.project.name}` : ""}.`;
+    }
+    if (tasks.length > 25) {
+      return `That Asana query returned ${tasks.length} tasks. I can complete at most 25 at once, so no tasks were changed. Narrow the list or say complete the first 25 shown after listing it.`;
+    }
+
+    return this.executeConcreteAsanaCompletion({
+      tasks: tasks.map((task) => ({
+        taskGid: task.gid,
+        name: task.name,
+        projectName: task.projects?.[0]?.name,
+        dueOn: task.dueOn
+      })),
+      user: input.user,
+      conversation: input.conversation,
+      latestUserMessage: input.latestUserMessage
+    });
+  }
+
   private async executeConcreteAsanaCompletion(input: {
     tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>;
     user: User;
@@ -1107,7 +1193,7 @@ export class AgentOrchestrator {
       if (!result.ok) {
         return result.userMessage ?? "I couldn't complete that Asana task.";
       }
-      return "Completed 1 Asana task.";
+      return formatConcreteAsanaCompletionMessage(input.tasks, result.data);
     }
 
     const result = await this.toolExecutor.executeToolCall(
@@ -1126,7 +1212,11 @@ export class AgentOrchestrator {
       { force: true }
     );
 
-    return result.userMessage ?? `Completed ${input.tasks.length} Asana tasks.`;
+    if (!result.ok) {
+      return result.userMessage ?? "I couldn't complete those Asana tasks.";
+    }
+
+    return formatConcreteAsanaCompletionMessage(input.tasks, result.data);
   }
 
   private async handleConfirmationIntent(input: {
@@ -1757,6 +1847,64 @@ function compactReplySections(sections: Array<string | undefined | null>): strin
     .map((section) => section?.trim())
     .filter((section): section is string => Boolean(section) && section !== "Done.")
     .join("\n\n");
+}
+
+function formatConcreteAsanaCompletionMessage(
+  tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>,
+  resultData: unknown
+): string {
+  const completedText = `Completed ${tasks.length} Asana task${tasks.length === 1 ? "" : "s"}`;
+  const preview = formatAsanaCompletionPreview(tasks);
+  const recurrenceNote = formatRecurringAsanaCompletionNote(tasks, resultData);
+  return `${completedText}${preview ? `: ${preview}` : ""}.${recurrenceNote ? `\n${recurrenceNote}` : ""}`;
+}
+
+function formatAsanaCompletionPreview(
+  tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>
+): string {
+  const visible = tasks.slice(0, 5).map((task) => {
+    const details = [task.projectName, task.dueOn ? `due ${task.dueOn}` : undefined]
+      .filter(Boolean)
+      .join(" • ");
+    return `${task.name ?? task.taskGid}${details ? ` (${details})` : ""}`;
+  });
+  if (tasks.length > visible.length) visible.push(`and ${tasks.length - visible.length} more`);
+  return visible.join("; ");
+}
+
+function formatRecurringAsanaCompletionNote(
+  originalTasks: Array<{ taskGid: string; name?: string; dueOn?: string }>,
+  resultData: unknown
+): string | null {
+  const updatedTasks = extractUpdatedAsanaTasks(resultData);
+  if (!updatedTasks.length) return null;
+
+  const originalByGid = new Map(originalTasks.map((task) => [task.taskGid, task]));
+  const rolledForward = updatedTasks.filter((task) => {
+    const original = originalByGid.get(task.gid);
+    if (!original) return false;
+    return (
+      task.completed === false ||
+      (Boolean(original.dueOn) && Boolean(task.dueOn) && task.dueOn !== original.dueOn)
+    );
+  });
+
+  if (!rolledForward.length) return null;
+  const names = rolledForward
+    .slice(0, 3)
+    .map((task) => task.name)
+    .join(", ");
+  const suffix = rolledForward.length > 3 ? `, and ${rolledForward.length - 3} more` : "";
+  const pronoun = rolledForward.length === 1 ? "it" : "them";
+  return `Recurring note: ${names}${suffix} may still appear open because Asana rolled ${pronoun} to the next occurrence.`;
+}
+
+function extractUpdatedAsanaTasks(data: unknown): AsanaTaskSummary[] {
+  if (!data || typeof data !== "object") return [];
+  if ("gid" in data) return [data as AsanaTaskSummary];
+
+  const updated = (data as { updated?: unknown }).updated;
+  return Array.isArray(updated) ? (updated as AsanaTaskSummary[]) : [];
 }
 
 function matchRecentGoogleDocDeleteRequest(

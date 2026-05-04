@@ -1272,7 +1272,7 @@ export class ToolExecutor {
       await this.rememberRecentAsanaTasks(context.user.id, updated);
     }
 
-    const summary = formatAsanaBulkCompletionSummary(updated.length, failed);
+    const summary = formatAsanaBulkCompletionSummary(updated, failed, input.taskPreview ?? []);
     await this.rememberLastFailedAsanaBulkUpdate(context.user.id, failed, summary);
 
     const data = {
@@ -2302,16 +2302,21 @@ function isRetryableAsanaError(error: unknown): boolean {
 }
 
 function formatAsanaBulkCompletionSummary(
-  updatedCount: number,
-  failed: AsanaBulkFailure[]
+  updated: AsanaTaskSummary[],
+  failed: AsanaBulkFailure[],
+  taskPreview: AsanaTaskPreview[] = []
 ): string {
+  const updatedCount = updated.length;
   const completedText = `Completed ${updatedCount} Asana task${updatedCount === 1 ? "" : "s"}`;
-  if (!failed.length) return `${completedText}.`;
+  const preview = formatCompletedAsanaTaskPreview(updated, taskPreview);
+  const recurrenceNote = formatBulkRecurringAsanaCompletionNote(updated, taskPreview);
+  const completionLine = `${completedText}${preview ? `: ${preview}` : ""}.${recurrenceNote ? ` ${recurrenceNote}` : ""}`;
+  if (!failed.length) return completionLine;
 
   const grouped = groupAsanaBulkFailures(failed);
   if (grouped.length === 1) {
     const group = grouped[0]!;
-    return `${completedText}; ${failed.length} failed because ${asanaBulkFailureReason(group.code)} ${asanaBulkFailureNextStep(group.code)}`;
+    return `${completionLine} ${failed.length} failed because ${asanaBulkFailureReason(group.code)} ${asanaBulkFailureNextStep(group.code)}`;
   }
 
   const reasonLines = grouped
@@ -2321,10 +2326,56 @@ function formatAsanaBulkCompletionSummary(
         `${group.count} ${group.code}: ${asanaBulkFailureReason(group.code)} ${asanaBulkFailureNextStep(group.code)}`
     );
   return [
-    `${completedText}; ${failed.length} failed.`,
+    `${completionLine} ${failed.length} failed.`,
     "Failed reasons:",
     ...reasonLines.map((line) => `• ${line}`)
   ].join("\n");
+}
+
+function formatCompletedAsanaTaskPreview(
+  updated: AsanaTaskSummary[],
+  taskPreview: AsanaTaskPreview[]
+): string {
+  const previewByGid = new Map(
+    taskPreview.filter((task) => task.taskGid).map((task) => [task.taskGid!, task] as const)
+  );
+  const visible = updated.slice(0, 5).map((task) => {
+    const preview = previewByGid.get(task.gid);
+    const details = [
+      preview?.projectName ?? task.projects?.[0]?.name,
+      (preview?.dueOn ?? task.dueOn) ? `due ${preview?.dueOn ?? task.dueOn}` : undefined
+    ]
+      .filter(Boolean)
+      .join(" • ");
+    return `${preview?.name ?? task.name}${details ? ` (${details})` : ""}`;
+  });
+  if (updated.length > visible.length) visible.push(`and ${updated.length - visible.length} more`);
+  return visible.join("; ");
+}
+
+function formatBulkRecurringAsanaCompletionNote(
+  updated: AsanaTaskSummary[],
+  taskPreview: AsanaTaskPreview[]
+): string | null {
+  const previewByGid = new Map(
+    taskPreview.filter((task) => task.taskGid).map((task) => [task.taskGid!, task] as const)
+  );
+  const rolledForward = updated.filter((task) => {
+    const preview = previewByGid.get(task.gid);
+    return (
+      task.completed === false ||
+      (Boolean(preview?.dueOn) && Boolean(task.dueOn) && task.dueOn !== preview?.dueOn)
+    );
+  });
+  if (!rolledForward.length) return null;
+
+  const names = rolledForward
+    .slice(0, 3)
+    .map((task) => previewByGid.get(task.gid)?.name ?? task.name)
+    .join(", ");
+  const suffix = rolledForward.length > 3 ? `, and ${rolledForward.length - 3} more` : "";
+  const pronoun = rolledForward.length === 1 ? "it" : "them";
+  return `Recurring note: ${names}${suffix} may still appear open because Asana rolled ${pronoun} to the next occurrence.`;
 }
 
 function groupAsanaBulkFailures(

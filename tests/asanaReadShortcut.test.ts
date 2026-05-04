@@ -9,6 +9,7 @@ import {
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchAsanaListThenCompleteRequest,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
@@ -47,6 +48,26 @@ describe("asana read shortcut", () => {
       matchListedAsanaBulkCompleteRequest("can you mark all those tasks listed as complete")
     ).toBe(true);
     expect(matchListedAsanaBulkCompleteRequest("complete all tasks")).toBe(false);
+  });
+
+  it("extracts a same-message Asana list before completing those tasks", () => {
+    const shortcut = matchAsanaListThenCompleteRequest(
+      "list all open tasks in Scanis-OLD due before today. mark those Asana tasks complete and check my calendar tomorrow",
+      [],
+      [],
+      "America/New_York",
+      new Date("2026-05-03T12:00:00.000Z")
+    );
+
+    expect(shortcut).toMatchObject({
+      listText: "list all open tasks in Scanis-OLD due before today",
+      listShortcut: {
+        scope: "project",
+        project: { name: "Scanis-OLD" },
+        completed: false,
+        dueBefore: "2026-05-02"
+      }
+    });
   });
 
   it("computes due dates in the user's timezone", () => {

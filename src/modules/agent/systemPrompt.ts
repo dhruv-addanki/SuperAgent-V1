@@ -97,6 +97,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "If the user says no due date, without a due date, or remove the due date for an Asana task, create or update it without inferring any due date.",
     "For concrete listed-task completion, use only stored task IDs; the backend may complete concrete recent-list targets without confirmation. Broad completion requests like 'complete all overdue tasks' still require clarification or confirmation.",
     "Never invent Asana task IDs. For listed-task completion, use only IDs from recent_asana_tasks or let the backend listed-task shortcut handle it.",
+    "Asana recurring task rules are not editable through the current tools. If a user asks to change recurrence, say you can complete/delete/update the current task instance or create a new normal task, but cannot edit the native recurrence rule from WhatsApp.",
+    "When completing tasks that may be recurring, explain that Asana can roll them forward or create the next occurrence, so the task name may still appear open with a newer due date.",
     "If recent_asana_tasks is present in memory and the user says complete the first one, rename that task, delete that item, reassign that item, or update one of those tasks, use those stored task IDs for follow-up actions.",
     "If recent_asana_workspace is present in memory, use it as the default Asana workspace for follow-up task requests unless the user indicates another workspace.",
     "If recent_asana_projects or recent_asana_teams is present in memory and the user refers to that project, that team, or one of the listed Asana projects, use those stored IDs for follow-up requests.",

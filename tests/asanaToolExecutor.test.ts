@@ -918,7 +918,9 @@ describe("tool executor Asana flows", () => {
 
     expect(result.ok).toBe(true);
     expect(updateTaskMock).toHaveBeenCalledTimes(20);
-    expect(result.userMessage).toBe("Completed 20 Asana tasks.");
+    expect(result.userMessage).toBe(
+      "Completed 20 Asana tasks: Task task_1; Task task_2; Task task_3; Task task_4; Task task_5; and 15 more."
+    );
   });
 
   it("retries transient bulk completion failures", async () => {
@@ -942,7 +944,33 @@ describe("tool executor Asana flows", () => {
 
     expect(result.ok).toBe(true);
     expect(updateTaskMock).toHaveBeenCalledTimes(2);
-    expect(result.userMessage).toBe("Completed 1 Asana task.");
+    expect(result.userMessage).toBe("Completed 1 Asana task: Task 1.");
+  });
+
+  it("explains when Asana rolls recurring tasks forward after completion", async () => {
+    const executor = makeExecutor();
+    updateTaskMock.mockResolvedValue({
+      gid: "task_1",
+      name: "Workout",
+      completed: false,
+      dueOn: "2026-05-04"
+    });
+
+    const result = await executor.executeToolCall(
+      "asana_bulk_update_tasks",
+      {
+        taskGids: ["task_1"],
+        completed: true,
+        taskPreview: [{ taskGid: "task_1", name: "Workout", dueOn: "2026-04-11" }]
+      },
+      makeContext("yes"),
+      { force: true }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.userMessage).toBe(
+      "Completed 1 Asana task: Workout (due 2026-04-11). Recurring note: Workout may still appear open because Asana rolled it to the next occurrence."
+    );
   });
 
   it("does not retry permanent bulk completion failures and stores diagnostics", async () => {
@@ -991,6 +1019,8 @@ describe("tool executor Asana flows", () => {
     expect(updateTaskMock).toHaveBeenCalledTimes(2);
     expect(updateTaskMock).toHaveBeenNthCalledWith(1, { taskGid: "task_1", completed: true });
     expect(updateTaskMock).toHaveBeenNthCalledWith(2, { taskGid: "task_2", completed: true });
-    expect(result.userMessage).toBe("Completed 2 Asana tasks.");
+    expect(result.userMessage).toBe(
+      "Completed 2 Asana tasks: Ship Asana integration; Ship Asana integration."
+    );
   });
 });

@@ -235,6 +235,7 @@ function summarizeToolCall(call: FunctionCall, result: ToolExecutionResult): str
 }
 
 function formatStatusSection(title: string, items: string[]): string {
+  if (items.length === 1) return `${title} ${items[0]}`;
   return [title, ...items.map((item) => `- ${item}`)].join("\n");
 }
 

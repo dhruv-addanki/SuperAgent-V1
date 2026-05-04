@@ -36,6 +36,11 @@ export interface AsanaLatestTaskShortcut {
   label: string;
 }
 
+export interface AsanaListThenCompleteShortcut {
+  listShortcut: AsanaListShortcut;
+  listText: string;
+}
+
 export interface AsanaBulkCompleteClarification {
   taskCount: number;
   projectName?: string;
@@ -329,6 +334,23 @@ export function resolveConcreteAsanaCompletionTarget(
   }
 
   return null;
+}
+
+export function matchAsanaListThenCompleteRequest(
+  text: string,
+  history: ResponseInputItem[],
+  memoryEntries: PromptMemoryEntry[],
+  timezone: string,
+  baseDate = new Date()
+): AsanaListThenCompleteShortcut | null {
+  const normalized = normalizeCompletionText(text);
+  if (!asksToCompleteAsanaTask(normalized) || !referencesAllListedTasks(normalized)) return null;
+
+  const listText = extractAsanaListClauseBeforeCompletion(text);
+  if (!listText) return null;
+
+  const listShortcut = matchAsanaListShortcut(listText, history, memoryEntries, timezone, baseDate);
+  return listShortcut ? { listShortcut, listText } : null;
 }
 
 export function lastFailedAsanaBulkRetryTaskList(
@@ -1134,6 +1156,38 @@ function referencesSingleRecentTask(normalizedText: string): boolean {
     /\b(?:mark|complete|finish|set)\s+(?:it|that|this)\b/.test(normalizedText) ||
     /\b(?:it|that|this)\s+(?:as\s+)?(?:complete|done|finished)\b/.test(normalizedText)
   );
+}
+
+function extractAsanaListClauseBeforeCompletion(text: string): string | null {
+  const clauses = text
+    .split(/[.!?;\n]+|\bthen\b|\band then\b/i)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+
+  for (const clause of clauses) {
+    const stripped = stripCompletionTail(clause);
+    const normalized = normalizeCompletionText(stripped);
+    if (/\b(?:show|list|check|read)\b/.test(normalized) && /\btasks?\b/.test(normalized)) {
+      return stripped;
+    }
+  }
+
+  const stripped = stripCompletionTail(text);
+  const normalized = normalizeCompletionText(stripped);
+  if (/\b(?:show|list|check|read)\b/.test(normalized) && /\btasks?\b/.test(normalized)) {
+    return stripped;
+  }
+
+  return null;
+}
+
+function stripCompletionTail(text: string): string {
+  return text
+    .replace(
+      /\b(?:and\s+)?(?:mark|complete|finish|set)\b[\s\S]*\b(?:complete|done|finished|tasks?)\b[\s\S]*$/i,
+      ""
+    )
+    .trim();
 }
 
 function resolveFirstShownCompletionTargets(

@@ -2731,7 +2731,12 @@ describe("agent orchestrator", () => {
       .spyOn(ToolExecutor.prototype, "executeToolCall")
       .mockResolvedValue({
         ok: true,
-        userMessage: "Completed 2 Asana tasks."
+        data: {
+          updated: [
+            { gid: "task_1", name: "test 1", completed: true },
+            { gid: "task_2", name: "test 2", completed: true }
+          ]
+        }
       });
 
     const prisma = {
@@ -2827,7 +2832,7 @@ describe("agent orchestrator", () => {
     );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Completed 2 Asana tasks."
+      "Completed 2 Asana tasks: test 1 (Scanis); test 2 (due 2026-05-25)."
     );
   });
 
@@ -2836,7 +2841,11 @@ describe("agent orchestrator", () => {
       .spyOn(ToolExecutor.prototype, "executeToolCall")
       .mockResolvedValue({
         ok: true,
-        userMessage: "Updated task."
+        data: {
+          gid: "task_1",
+          name: "test 1",
+          completed: true
+        }
       });
 
     const prisma = {
@@ -2910,7 +2919,7 @@ describe("agent orchestrator", () => {
     );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Completed 1 Asana task."
+      "Completed 1 Asana task: test 1."
     );
   });
 
@@ -3055,7 +3064,12 @@ describe("agent orchestrator", () => {
       .spyOn(ToolExecutor.prototype, "executeToolCall")
       .mockResolvedValue({
         ok: true,
-        userMessage: "Completed 2 Asana tasks."
+        data: {
+          updated: [
+            { gid: "task_1", name: "test 1", completed: true },
+            { gid: "task_2", name: "test 2", completed: true }
+          ]
+        }
       });
     runResponseLoopMock.mockResolvedValue({
       assistantMessage: "Calendar tomorrow: no events found.",
@@ -3139,7 +3153,151 @@ describe("agent orchestrator", () => {
     );
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
-      "Completed 2 Asana tasks.\n\nCalendar tomorrow: no events found."
+      "Completed 2 Asana tasks: test 1; test 2.\n\nCalendar tomorrow: no events found."
+    );
+  });
+
+  it("reads a same-message Asana list before completing those tasks", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockImplementation(async (toolName: string) => {
+        if (toolName === "asana_list_project_tasks") {
+          return {
+            ok: true,
+            data: [
+              {
+                gid: "fresh_1",
+                name: "Fresh Scanis task 1",
+                completed: false,
+                dueOn: "2026-02-18",
+                projects: [{ gid: "project_1", name: "Scanis-OLD" }]
+              },
+              {
+                gid: "fresh_2",
+                name: "Fresh Scanis task 2",
+                completed: false,
+                dueOn: "2026-02-23",
+                projects: [{ gid: "project_1", name: "Scanis-OLD" }]
+              }
+            ]
+          };
+        }
+        if (toolName === "asana_bulk_update_tasks") {
+          return {
+            ok: true,
+            data: {
+              updated: [
+                { gid: "fresh_1", name: "Fresh Scanis task 1", completed: true },
+                { gid: "fresh_2", name: "Fresh Scanis task 2", completed: true }
+              ]
+            }
+          };
+        }
+        return { ok: false, userMessage: "Unexpected tool" };
+      });
+    runResponseLoopMock.mockResolvedValue({
+      assistantMessage: "Calendar tomorrow: no events found.",
+      toolRounds: 0
+    });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "last_visible_asana_task_list",
+            value: {
+              tasks: [
+                { taskGid: "old_1", name: "Old visible task" },
+                { taskGid: "old_2", name: "Another old visible task" }
+              ]
+            },
+            updatedAt: new Date()
+          }
+        ]),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      googleAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      asanaAccount: { findUnique: vi.fn(async () => ({ userId: "user_1" })) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "list all open tasks in Scanis-OLD due before today. mark those Asana tasks complete and check my calendar tomorrow"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenNthCalledWith(
+      1,
+      "asana_list_project_tasks",
+      expect.objectContaining({
+        projectName: "Scanis-OLD",
+        completed: false,
+        dueBefore: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
+      }),
+      expect.objectContaining({
+        latestUserMessage:
+          "list all open tasks in Scanis-OLD due before today. mark those Asana tasks complete and check my calendar tomorrow"
+      })
+    );
+    expect(executeToolCallSpy).toHaveBeenNthCalledWith(
+      2,
+      "asana_bulk_update_tasks",
+      expect.objectContaining({
+        taskGids: ["fresh_1", "fresh_2"],
+        completed: true,
+        source: "recent_list"
+      }),
+      expect.objectContaining({
+        latestUserMessage:
+          "list all open tasks in Scanis-OLD due before today. mark those Asana tasks complete and check my calendar tomorrow"
+      }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+      "asana_bulk_update_tasks",
+      expect.objectContaining({ taskGids: ["old_1", "old_2"] }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(String(runResponseLoopMock.mock.calls[0]?.[0]?.instructions)).toContain(
+      "Do not call any Asana tools"
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Completed 2 Asana tasks: Fresh Scanis task 1 (Scanis-OLD • due 2026-02-18); Fresh Scanis task 2 (Scanis-OLD • due 2026-02-23).\n\nCalendar tomorrow: no events found."
     );
   });
 
