@@ -528,6 +528,28 @@ describe("tool executor Asana flows", () => {
     );
   });
 
+  it("does not pass person-name assignees inferred from task title wording to Asana create", async () => {
+    const executor = makeExecutor();
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      {
+        workspaceGid: "workspace_1",
+        name: "add money to Rohan lunch account",
+        assigneeGid: "Rohan"
+      },
+      makeContext("add a task called add money to Rohan lunch account")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "add money to Rohan lunch account",
+        assigneeGid: "user_asana_1"
+      })
+    );
+  });
+
   it("keeps an explicit real assignee ID for task creation", async () => {
     const executor = makeExecutor();
 

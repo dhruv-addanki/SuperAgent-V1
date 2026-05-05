@@ -221,6 +221,7 @@ function normalizeAsanaWriteInput(toolName: ToolName, input: any, latestUserMess
 
   const normalized = { ...input };
   if (toolName === "asana_create_task") {
+    normalizeAsanaCreateAssignee(normalized);
     const recoveredProjectNames = extractAsanaCreateProjectNames(latestUserMessage);
     if (recoveredProjectNames.length) {
       normalized.projectNames = recoveredProjectNames;
@@ -2274,6 +2275,32 @@ function formatAsanaCreatedTaskMessage(task: AsanaTaskSummary): string {
 
 function isAsanaSelfOrEmptyAssignee(value: string): boolean {
   return /^(me|null|none|undefined|unassigned|no assignee)$/i.test(value.trim());
+}
+
+function normalizeAsanaCreateAssignee(input: { assigneeGid?: unknown }): void {
+  if (!Object.prototype.hasOwnProperty.call(input, "assigneeGid")) return;
+  if (typeof input.assigneeGid !== "string") {
+    delete input.assigneeGid;
+    return;
+  }
+
+  const assigneeGid = input.assigneeGid.trim();
+  if (!assigneeGid) {
+    delete input.assigneeGid;
+    return;
+  }
+
+  if (isAsanaSelfOrEmptyAssignee(assigneeGid) || isLikelyAsanaActorGid(assigneeGid)) {
+    input.assigneeGid = assigneeGid;
+    return;
+  }
+
+  delete input.assigneeGid;
+}
+
+function isLikelyAsanaActorGid(value: string): boolean {
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) || /^user_[A-Za-z0-9_-]+$/.test(trimmed);
 }
 
 function isRetryableAsanaError(error: unknown): boolean {
