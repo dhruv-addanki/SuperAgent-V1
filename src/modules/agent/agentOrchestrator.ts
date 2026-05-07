@@ -60,11 +60,13 @@ import {
   lastVisibleAsanaTaskList,
   matchAmbiguousAsanaBulkCompleteRequest,
   matchAsanaBulkRetryRequest,
+  matchAsanaDueDateUpdateRequest,
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
   matchAsanaListThenCompleteRequest,
   matchAsanaMultiCreateRequest,
+  matchAsanaOverdueOfferConfirmation,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
@@ -466,6 +468,99 @@ export class AgentOrchestrator {
       );
       if (shouldUseTextShortcuts && projectFollowUpClarification) {
         await replyToUser(projectFollowUpClarification);
+        return;
+      }
+
+      const asanaDueDateUpdate = shouldUseTextShortcuts
+        ? matchAsanaDueDateUpdateRequest(preparedInput.text, user.timezone)
+        : null;
+      if (asanaDueDateUpdate) {
+        if (asanaDueDateUpdate.status !== "resolved") {
+          await replyToUser(asanaDueDateUpdate.message);
+          return;
+        }
+
+        const asanaStatus = setupStatus.integrations.find(
+          (integration) => integration.key === "asana"
+        );
+        if (!integrationConnected(setupStatus, "asana") && asanaStatus) {
+          await replyToUser(formatMissingIntegrationForWhatsApp(asanaStatus), {
+            allowSetupHint: false
+          });
+          return;
+        }
+
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_update_task",
+          {
+            taskName: asanaDueDateUpdate.taskName,
+            dueOn: asanaDueDateUpdate.dueOn
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          },
+          { force: true }
+        );
+
+        await replyToUser(
+          result.ok
+            ? formatAsanaDueDateUpdateReply(
+                result.data as AsanaTaskSummary | undefined,
+                asanaDueDateUpdate
+              )
+            : (result.userMessage ?? "I couldn't update that Asana task.")
+        );
+        return;
+      }
+
+      const asanaOverdueFollowUp = shouldUseTextShortcuts
+        ? matchAsanaOverdueOfferConfirmation(preparedInput.text, history)
+        : false;
+      if (asanaOverdueFollowUp) {
+        const asanaStatus = setupStatus.integrations.find(
+          (integration) => integration.key === "asana"
+        );
+        if (!integrationConnected(setupStatus, "asana") && asanaStatus) {
+          await replyToUser(formatMissingIntegrationForWhatsApp(asanaStatus), {
+            allowSetupHint: false
+          });
+          return;
+        }
+
+        const today = asanaTaskDueDate("today", user.timezone);
+        const result = await this.toolExecutor.executeToolCall(
+          "asana_list_my_tasks",
+          {
+            completed: false,
+            dueBefore: shiftIsoDate(today, -1),
+            limit: 50,
+            sortBy: "due",
+            sortDirection: "asc"
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+
+        if (!result.ok) {
+          await replyToUser(
+            result.userMessage ?? "I couldn't load your overdue Asana tasks right now."
+          );
+          return;
+        }
+
+        await replyToUser(
+          formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+            label: "overdue",
+            emptyLabel: "I don't see open overdue Asana tasks.",
+            displayLimit: 50,
+            emphasizeImportance: true
+          })
+        );
         return;
       }
 
@@ -1959,6 +2054,15 @@ function formatAsanaMultiCreateMessage(
   return sections.join("\n\n") || "I couldn't identify any Asana tasks to create.";
 }
 
+function formatAsanaDueDateUpdateReply(
+  task: AsanaTaskSummary | undefined,
+  update: { taskName: string; dueOn: string | null }
+): string {
+  const name = task?.name ?? update.taskName;
+  const dueOn = task?.dueOn ?? update.dueOn;
+  return [`Updated: ${name}`, dueOn ? `Due: ${dueOn}` : "Due date removed"].join("\n");
+}
+
 function formatConcreteAsanaCompletionMessage(
   tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>,
   resultData: unknown
@@ -2015,6 +2119,13 @@ function extractUpdatedAsanaTasks(data: unknown): AsanaTaskSummary[] {
 
   const updated = (data as { updated?: unknown }).updated;
   return Array.isArray(updated) ? (updated as AsanaTaskSummary[]) : [];
+}
+
+function shiftIsoDate(value: string, offsetDays: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year ?? 1970, (month ?? 1) - 1, day ?? 1));
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
 }
 
 function matchRecentGoogleDocDeleteRequest(

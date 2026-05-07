@@ -79,6 +79,36 @@ describe("intent router", () => {
     });
   });
 
+  it("routes Asana due-date updates and overdue-offer confirmations to shortcuts", () => {
+    expect(
+      classifyIntentRoute({
+        text: "Move my check with parents... task to be due today",
+        timezone: "America/New_York"
+      })
+    ).toMatchObject({
+      domains: ["asana"],
+      action: "update",
+      shortcutCandidate: "asana_due_date_update"
+    });
+
+    expect(
+      classifyIntentRoute({
+        text: "Yes",
+        history: [
+          {
+            role: "assistant",
+            content:
+              "No Asana tasks were due yesterday.\n\nIf you want, I can show overdue tasks instead."
+          }
+        ]
+      })
+    ).toMatchObject({
+      domains: ["asana"],
+      action: "read",
+      shortcutCandidate: "asana_overdue_followup"
+    });
+  });
+
   it("does not treat setup words inside Asana task names as reconnect requests", () => {
     const route = classifyIntentRoute({
       text: "add a task to asana called oauth reconnect test due tmr"

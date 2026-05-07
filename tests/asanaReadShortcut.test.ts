@@ -6,11 +6,13 @@ import {
   formatScopedAsanaTaskList,
   formatAsanaTaskOverview,
   matchAmbiguousAsanaBulkCompleteRequest,
+  matchAsanaDueDateUpdateRequest,
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
   matchAsanaListThenCompleteRequest,
   matchAsanaMultiCreateRequest,
+  matchAsanaOverdueOfferConfirmation,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
@@ -40,6 +42,68 @@ describe("asana read shortcut", () => {
         new Date("2026-04-23T15:00:00.000Z")
       )
     ).toBeNull();
+    expect(
+      matchAsanaListShortcut(
+        "Move my check with parents... task to be due today",
+        [],
+        [],
+        "America/New_York",
+        new Date("2026-05-06T04:20:00.000Z")
+      )
+    ).toBeNull();
+  });
+
+  it("matches Asana due-date updates despite punctuation and incomplete phrasing", () => {
+    const baseDate = new Date("2026-05-06T04:20:00.000Z");
+
+    expect(
+      matchAsanaDueDateUpdateRequest(
+        "Move check with parents asana task due date to tmr",
+        "America/New_York",
+        baseDate
+      )
+    ).toEqual({
+      status: "resolved",
+      taskName: "check with parents",
+      dueOn: "2026-05-07"
+    });
+
+    expect(
+      matchAsanaDueDateUpdateRequest(
+        "Move my check with parents... task to be due today",
+        "America/New_York",
+        baseDate
+      )
+    ).toEqual({
+      status: "resolved",
+      taskName: "check with parents",
+      dueOn: "2026-05-06"
+    });
+
+    expect(
+      matchAsanaDueDateUpdateRequest(
+        "Move the check case study task from",
+        "America/New_York",
+        baseDate
+      )
+    ).toEqual({
+      status: "needs_due_date",
+      taskName: "check case study",
+      message: 'What due date should I move "check case study" to?'
+    });
+  });
+
+  it("matches yes after an overdue-task offer as an overdue follow-up", () => {
+    expect(
+      matchAsanaOverdueOfferConfirmation("Yes", [
+        {
+          role: "assistant",
+          content:
+            "No Asana tasks were due yesterday.\n\nIf you want, I can show overdue tasks instead."
+        }
+      ])
+    ).toBe(true);
+    expect(matchAsanaOverdueOfferConfirmation("Yes", [])).toBe(false);
   });
 
   it("matches Asana project lists and listed-task completion", () => {

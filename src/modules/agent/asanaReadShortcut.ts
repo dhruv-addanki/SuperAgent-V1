@@ -48,6 +48,18 @@ export interface AsanaMultiCreateShortcut {
   }>;
 }
 
+export type AsanaDueDateUpdateShortcut =
+  | {
+      status: "resolved";
+      taskName: string;
+      dueOn: string | null;
+    }
+  | {
+      status: "needs_due_date" | "needs_task";
+      taskName?: string;
+      message: string;
+    };
+
 export interface AsanaBulkCompleteClarification {
   taskCount: number;
   projectName?: string;
@@ -216,6 +228,62 @@ export function matchAsanaMultiCreateRequest(
       ...(dueOn ? { dueOn } : {})
     }))
   };
+}
+
+export function matchAsanaDueDateUpdateRequest(
+  text: string,
+  timezone: string,
+  baseDate = new Date()
+): AsanaDueDateUpdateShortcut | null {
+  const normalized = normalizeIntentText(text);
+  if (!/\b(?:move|change|update|set|make|reschedule)\b/.test(normalized)) return null;
+  if (!/\b(?:asana|tasks?|due date)\b/.test(normalized)) return null;
+  if (!/\b(?:due|date|today|tomorrow|tmr|tmrw|yesterday|from)\b/.test(normalized)) return null;
+
+  const taskName = extractDueDateUpdateTaskName(text);
+  const dueOn = parseDueDateUpdateTarget(normalized, timezone, baseDate);
+
+  if (dueOn === undefined) {
+    if (/\bfrom\s*$|\b(?:to|due|date)\s*$/.test(normalized)) {
+      return {
+        status: "needs_due_date",
+        ...(taskName ? { taskName } : {}),
+        message: taskName
+          ? `What due date should I move "${taskName}" to?`
+          : "What due date should I move that Asana task to?"
+      };
+    }
+    return null;
+  }
+
+  if (!taskName) {
+    return {
+      status: "needs_task",
+      message: "Which Asana task should I update?"
+    };
+  }
+
+  return { status: "resolved", taskName, dueOn };
+}
+
+export function matchAsanaOverdueOfferConfirmation(
+  text: string,
+  history: ResponseInputItem[]
+): boolean {
+  const normalized = normalize(text)
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  if (!/^(?:yes|yeah|yep|sure|ok|okay|please do|do that)$/i.test(normalized)) return false;
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index];
+    if (item?.role !== "assistant") continue;
+    const content = typeof item.content === "string" ? normalize(item.content) : "";
+    if (!content) continue;
+    return /\bshow overdue tasks instead\b|\boverdue tasks instead\b/.test(content);
+  }
+
+  return false;
 }
 
 export function lastVisibleAsanaTaskList(
@@ -674,6 +742,13 @@ function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
 }
 
+function normalizeIntentText(text: string): string {
+  return normalize(text)
+    .replace(/[.?!…]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractNamedTaskCreations(text: string): string[] {
   const markerPattern =
     /\b(?:first\s+|another\s+|and\s+another\s+|one\s+more\s+|also\s+)?(?:add(?:ed)?\s+)?(?:a\s+)?task\s+(?:called|named|titled)\s*[:.,-]?\s*/gi;
@@ -731,18 +806,99 @@ function parseCreateDueOn(
   return isoDue?.[1];
 }
 
-function isLikelyAsanaWriteRequest(normalizedText: string): boolean {
-  const mentionsTask = /\b(tasks?|asana)\b/.test(normalizedText);
-  const createTask =
-    /\b(create|add|make|set up)\b[^.?!]*\btasks?\b/.test(normalizedText) ||
-    /\btasks?\b[^.?!]*\b(create|add|make|set up)\b/.test(normalizedText);
-  const mutateTask =
-    /\b(delete|remove|trash|update|rename|change|move)\b[^.?!]*\btasks?\b/.test(normalizedText) ||
-    /\btasks?\b[^.?!]*\b(delete|remove|trash|update|rename|change|move)\b/.test(normalizedText);
-  const completeTask =
-    /\b(mark|set)\b[^.?!]*\btasks?\b[^.?!]*\b(complete|done|incomplete|open)\b/.test(
+function extractDueDateUpdateTaskName(text: string): string | undefined {
+  const source = text
+    .replace(/[’]/g, "'")
+    .replace(/\.{2,}|…/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  let working = source.replace(
+    /^\s*(?:please\s+)?(?:move|change|update|set|make|reschedule)\s+/i,
+    ""
+  );
+
+  const dueDateOfMatch = working.match(/\bdue\s+date\s+(?:of|for|on)\s+(.+?)\s+(?:to|for|on)\s+/i);
+  if (dueDateOfMatch?.[1]) {
+    return cleanupDueDateUpdateTaskName(dueDateOfMatch[1]);
+  }
+
+  const cutPatterns = [
+    /\s+(?:asana\s+)?tasks?\b/i,
+    /\s+due\s+date\b/i,
+    /\s+(?:to\s+be\s+)?due\b/i,
+    /\s+(?:to|for|on)\s+(?:today|tonight|tomorrow|tmr|tmrw|yesterday)\b/i,
+    /\s+(?:to|for|on)\s+(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/i,
+    new RegExp(`\\s+(?:to|for|on)\\s+(?:${MONTH_DAY_REFERENCE_PATTERN})\\b`, "i"),
+    /\s+from\s*$/i
+  ];
+
+  for (const pattern of cutPatterns) {
+    const match = working.match(pattern);
+    if (match?.index !== undefined && match.index >= 0) {
+      working = working.slice(0, match.index);
+      break;
+    }
+  }
+
+  return cleanupDueDateUpdateTaskName(working);
+}
+
+function cleanupDueDateUpdateTaskName(value: string): string | undefined {
+  const cleaned = value
+    .replace(/^(?:my|the|this|that)\s+/i, "")
+    .replace(/\b(?:asana|task|tasks)\b/gi, " ")
+    .replace(/^["'`.,:;\s-]+|["'`.,:;\s-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length >= 2 ? cleaned : undefined;
+}
+
+function parseDueDateUpdateTarget(
+  normalizedText: string,
+  timezone: string,
+  baseDate: Date
+): string | null | undefined {
+  if (
+    /\b(?:no due date|without (?:a |any )?due date|no deadline|remove (?:the )?due date)\b/.test(
       normalizedText
-    ) || /\b(complete|finish)\b[^.?!]*\btasks?\b/.test(normalizedText);
+    )
+  ) {
+    return null;
+  }
+  if (/\b(?:today|tonight)\b/.test(normalizedText)) {
+    return asanaTaskDueDate("today", timezone, baseDate);
+  }
+  if (/\b(?:tomorrow|tmr|tmrw)\b/.test(normalizedText)) {
+    return asanaTaskDueDate("tomorrow", timezone, baseDate);
+  }
+  if (/\byesterday\b/.test(normalizedText)) {
+    return relativeDateIso(timezone, -1, baseDate);
+  }
+
+  const dateMatch = normalizedText.match(
+    new RegExp(
+      `\\b(?:due|to|for|on)\\s+(${MONTH_DAY_REFERENCE_PATTERN}|${ISO_DATE_REFERENCE_PATTERN}|${SLASH_DATE_REFERENCE_PATTERN})\\b`
+    )
+  );
+  if (dateMatch?.[1]) {
+    return parseDateReference(dateMatch[1], timezone, baseDate)?.iso;
+  }
+
+  return undefined;
+}
+
+function isLikelyAsanaWriteRequest(normalizedText: string): boolean {
+  const intentText = normalizeIntentText(normalizedText);
+  const mentionsTask = /\b(tasks?|asana)\b/.test(intentText);
+  const createTask =
+    /\b(create|add|make|set up)\b.*\btasks?\b/.test(intentText) ||
+    /\btasks?\b.*\b(create|add|make|set up)\b/.test(intentText);
+  const mutateTask =
+    /\b(delete|remove|trash|update|rename|change|move|reschedule)\b.*\btasks?\b/.test(intentText) ||
+    /\btasks?\b.*\b(delete|remove|trash|update|rename|change|move|reschedule)\b/.test(intentText);
+  const completeTask =
+    /\b(mark|set)\b.*\btasks?\b.*\b(complete|done|incomplete|open)\b/.test(intentText) ||
+    /\b(complete|finish)\b.*\btasks?\b/.test(intentText);
 
   return mentionsTask && (createTask || mutateTask || completeTask);
 }

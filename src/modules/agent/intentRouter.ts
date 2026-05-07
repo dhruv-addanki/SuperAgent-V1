@@ -4,9 +4,11 @@ import type { PromptMemoryEntry } from "./conversationContext";
 import {
   matchAmbiguousAsanaBulkCompleteRequest,
   matchAsanaBulkRetryRequest,
+  matchAsanaDueDateUpdateRequest,
   matchAsanaDueTodayAndLatestOpenRequest,
   matchAsanaLatestTaskShortcut,
   matchAsanaListShortcut,
+  matchAsanaOverdueOfferConfirmation,
   matchAsanaProjectsRequest,
   matchGenericAsanaOpenTasksRequest,
   matchGenericAsanaMyTasksRequest,
@@ -56,6 +58,8 @@ export type IntentShortcutCandidate =
   | "recent_google_doc_delete"
   | "calendar_overview"
   | "asana_listed_bulk_complete"
+  | "asana_due_date_update"
+  | "asana_overdue_followup"
   | "asana_bulk_retry"
   | "asana_projects"
   | "asana_today_and_latest_open"
@@ -284,6 +288,14 @@ function detectShortcutCandidate(
     trace.push("shortcut:asana_bulk_retry");
     return "asana_bulk_retry";
   }
+  if (matchAsanaDueDateUpdateRequest(text, timezone)) {
+    trace.push("shortcut:asana_due_date_update");
+    return "asana_due_date_update";
+  }
+  if (matchAsanaOverdueOfferConfirmation(text, history)) {
+    trace.push("shortcut:asana_overdue_followup");
+    return "asana_overdue_followup";
+  }
   if (matchListedAsanaBulkCompleteRequest(text)) {
     trace.push("shortcut:asana_listed_bulk_complete");
     return "asana_listed_bulk_complete";
@@ -362,6 +374,8 @@ function applyShortcutDomainHints(
     shortcut === "asana_latest_task" ||
     shortcut === "asana_list" ||
     shortcut === "asana_listed_bulk_complete" ||
+    shortcut === "asana_due_date_update" ||
+    shortcut === "asana_overdue_followup" ||
     shortcut === "asana_bulk_retry" ||
     shortcut === "asana_projects" ||
     shortcut === "asana_project_tasks" ||
@@ -392,6 +406,7 @@ function detectAction(input: {
   trace: string[];
 }): IntentAction {
   const confirmation = parseConfirmationIntent(input.normalized);
+  if (input.shortcutCandidate === "asana_overdue_followup") return "read";
   if (confirmation && input.hasPendingAction) {
     input.trace.push(`action:${confirmation.toLowerCase()}_pending`);
     if (confirmation === "CANCEL") return "cancel";
@@ -411,6 +426,7 @@ function detectAction(input: {
   if (
     input.shortcutCandidate === "ambiguous_asana_bulk_complete" ||
     input.shortcutCandidate === "asana_listed_bulk_complete" ||
+    input.shortcutCandidate === "asana_due_date_update" ||
     input.shortcutCandidate === "asana_bulk_retry"
   ) {
     return "update";

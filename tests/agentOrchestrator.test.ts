@@ -1660,6 +1660,281 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("updates an Asana task due date deterministically despite punctuation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-06T04:20:00.000Z"));
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          gid: "task_1",
+          name: "check with parents",
+          completed: false,
+          dueOn: "2026-05-06"
+        }
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Move my check with parents... task to be due today"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_update_task",
+      {
+        taskName: "check with parents",
+        dueOn: "2026-05-06"
+      },
+      expect.objectContaining({
+        latestUserMessage: "Move my check with parents... task to be due today"
+      }),
+      { force: true }
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      "Updated: check with parents\nDue: 2026-05-06"
+    );
+  });
+
+  it("preserves Asana task-not-found diagnostics for due-date updates", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: false,
+        error: "ASANA_NOT_FOUND",
+        userMessage:
+          'I could not find an Asana task named "check with parents". Try listing matching tasks first.'
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Move check with parents asana task due date to tmr"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_update_task",
+      expect.objectContaining({
+        taskName: "check with parents"
+      }),
+      expect.anything(),
+      { force: true }
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      'I could not find an Asana task named "check with parents". Try listing matching tasks first.'
+    );
+  });
+
+  it("asks for the missing due date on incomplete Asana update commands", async () => {
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Move the check case study task from"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      'What due date should I move "check case study" to?'
+    );
+  });
+
+  it("routes yes after an overdue offer to open overdue My Tasks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-06T16:00:00.000Z"));
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: [
+          {
+            gid: "task_1",
+            name: "no due project test",
+            completed: false,
+            dueOn: "2026-05-03"
+          }
+        ]
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [
+          {
+            role: MessageRole.ASSISTANT,
+            content:
+              "No Asana tasks were due yesterday.\n\nIf you want, I can show overdue tasks instead."
+          }
+        ])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [])
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Yes"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_list_my_tasks",
+      {
+        completed: false,
+        dueBefore: "2026-05-05",
+        limit: 50,
+        sortBy: "due",
+        sortDirection: "asc"
+      },
+      expect.objectContaining({
+        latestUserMessage: "Yes"
+      })
+    );
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("no due project test")
+    );
+  });
+
   it("routes completed Asana tasks on an exact due date through deterministic reads", async () => {
     const executeToolCallSpy = vi
       .spyOn(ToolExecutor.prototype, "executeToolCall")
