@@ -3111,6 +3111,303 @@ describe("agent orchestrator", () => {
     );
   });
 
+  it("uses quoted WhatsApp Asana refs instead of stale visible-list memory", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          updated: [
+            { gid: "quoted_1", name: "Quoted task 1", completed: true },
+            { gid: "quoted_2", name: "Quoted task 2", completed: true }
+          ]
+        }
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => []),
+        findFirst: vi.fn(async () => ({
+          role: "assistant",
+          content: "Here are the open Asana tasks:\n\n1. Quoted task 1\n2. Quoted task 2",
+          rawPayload: {
+            whatsapp: { messageId: "wamid.quoted" },
+            asanaTaskRefs: [
+              { taskGid: "quoted_1", name: "Quoted task 1", index: 1 },
+              { taskGid: "quoted_2", name: "Quoted task 2", index: 2 }
+            ]
+          },
+          createdAt: new Date("2026-05-07T15:40:00.000Z")
+        }))
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => [
+          {
+            key: "last_visible_asana_task_list",
+            value: {
+              scopeLabel: "stale current memory",
+              tasks: [
+                { taskGid: "old_1", name: "Old task 1" },
+                { taskGid: "old_2", name: "Old task 2" }
+              ]
+            },
+            updatedAt: new Date()
+          }
+        ]),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => ({ messageId: "wamid.outbound" })),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "mark all these as complete",
+      replyToMessageId: "wamid.quoted"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_bulk_update_tasks",
+      expect.objectContaining({
+        taskGids: ["quoted_1", "quoted_2"],
+        taskPreview: [
+          { taskGid: "quoted_1", name: "Quoted task 1" },
+          { taskGid: "quoted_2", name: "Quoted task 2" }
+        ]
+      }),
+      expect.objectContaining({
+        latestUserMessage: "mark all these as complete"
+      }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+      "asana_bulk_update_tasks",
+      expect.objectContaining({ taskGids: ["old_1", "old_2"] }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(prisma.message.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          role: "ASSISTANT",
+          rawPayload: expect.objectContaining({
+            whatsapp: expect.objectContaining({ messageId: "wamid.outbound" })
+          })
+        })
+      })
+    );
+  });
+
+  it("blocks partial completion when pasted task lines do not all resolve", async () => {
+    const executeToolCallSpy = vi.spyOn(ToolExecutor.prototype, "executeToolCall");
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => []),
+        findFirst: vi.fn(async () => ({
+          role: "assistant",
+          content: "Here are the open Asana tasks:\n\n1. Gay Ass Homework\n2. Meditate",
+          rawPayload: {
+            whatsapp: { messageId: "wamid.quoted" },
+            asanaTaskRefs: [
+              {
+                taskGid: "task_school",
+                name: "Gay Ass Homework",
+                projectName: "School",
+                dueOn: "2026-05-03"
+              },
+              { taskGid: "task_meditate", name: "Meditate", dueOn: "2026-05-03" }
+            ]
+          }
+        }))
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: [
+        "mark these complete:",
+        "Gay Ass Homework (School • due 2026-05-03)",
+        "Missing task (No project • due 2026-05-03)"
+      ].join("\n"),
+      replyToMessageId: "wamid.quoted"
+    });
+
+    expect(executeToolCallSpy).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("I could not resolve every pasted Asana task")
+    );
+  });
+
+  it("resolves a referenced automation digest cluster before broad date completion", async () => {
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          updated: [
+            { gid: "content", name: "Content Planning", completed: true },
+            { gid: "onboarding", name: "Continue Building Onboarding", completed: true },
+            { gid: "test", name: "no due project test", completed: true }
+          ]
+        }
+      });
+
+    const digestMessage = {
+      role: "assistant",
+      content: [
+        "Morning email, calendar, and Asana digest",
+        "Asana:",
+        "Older overdue cluster from May 3: Content Planning, Continue Building Onboarding, plus a few test items"
+      ].join("\n"),
+      rawPayload: {
+        source: "automation_digest",
+        whatsapp: { messageId: "wamid.digest" },
+        asanaTaskRefs: [
+          {
+            taskGid: "content",
+            name: "Content Planning",
+            projectName: "Content",
+            dueOn: "2026-05-03"
+          },
+          {
+            taskGid: "onboarding",
+            name: "Continue Building Onboarding",
+            projectName: "Scanis-OLD",
+            dueOn: "2026-05-03"
+          },
+          { taskGid: "test", name: "no due project test", dueOn: "2026-05-03" },
+          { taskGid: "later", name: "text Verizon guy", dueOn: "2026-05-04" }
+        ]
+      },
+      createdAt: new Date("2026-05-07T12:00:00.000Z")
+    };
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [digestMessage])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "complete all overdue cluster from may 3rd"
+    });
+
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_bulk_update_tasks",
+      expect.objectContaining({
+        taskGids: ["content", "onboarding", "test"]
+      }),
+      expect.objectContaining({
+        latestUserMessage: "complete all overdue cluster from may 3rd"
+      }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+      "asana_bulk_update_tasks",
+      expect.objectContaining({ taskGids: expect.arrayContaining(["later"]) }),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("creates multiple voice-style Asana tasks instead of only the corrected first one", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-04T12:00:00.000Z"));

@@ -1,6 +1,7 @@
 export interface NormalizedWhatsAppInboundTextMessage {
   kind: "text";
   messageId: string;
+  replyToMessageId?: string;
   from: string;
   text: string;
   timestamp?: string;
@@ -10,6 +11,7 @@ export interface NormalizedWhatsAppInboundTextMessage {
 export interface NormalizedWhatsAppInboundAudioMessage {
   kind: "audio";
   messageId: string;
+  replyToMessageId?: string;
   from: string;
   mediaId: string;
   mimeType?: string;
@@ -22,6 +24,7 @@ export interface NormalizedWhatsAppInboundAudioMessage {
 export interface NormalizedWhatsAppInboundImageMessage {
   kind: "image";
   messageId: string;
+  replyToMessageId?: string;
   from: string;
   mediaId: string;
   mimeType?: string;

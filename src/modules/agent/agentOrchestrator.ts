@@ -72,8 +72,16 @@ import {
   matchGenericAsanaMyTasksRequest,
   matchListedAsanaBulkCompleteRequest,
   type AsanaListShortcut,
+  type LastVisibleAsanaTaskList,
   resolveConcreteAsanaCompletionTarget
 } from "./asanaReadShortcut";
+import {
+  asanaTaskRefsFromSummaries,
+  buildAssistantMessageRawPayload,
+  extractAsanaTaskRefsFromRawPayload,
+  whatsappMessageIdFromRawPayload,
+  type AsanaAssistantTaskRef
+} from "./asanaMessageRefs";
 import {
   calendarOverviewWindow,
   formatCalendarOverview,
@@ -87,6 +95,7 @@ export interface InboundWhatsAppTextInput {
   from: string;
   text: string;
   messageId?: string;
+  replyToMessageId?: string;
   rawPayload?: unknown;
 }
 
@@ -94,6 +103,7 @@ interface PreparedInboundText {
   from: string;
   text: string;
   messageId?: string;
+  replyToMessageId?: string;
   rawPayload?: unknown;
   modelInputItem?: ResponseInputItem;
   imageContext?: PreparedImageContext;
@@ -105,6 +115,13 @@ interface PreparedImageContext {
   mimeType?: string;
   downloadedMimeType: string;
   sha256?: string;
+}
+
+interface AssistantAsanaReferenceMessage {
+  content: string;
+  rawPayload?: unknown;
+  createdAt?: Date;
+  refs: AsanaAssistantTaskRef[];
 }
 
 interface AgentOrchestratorOptions {
@@ -152,6 +169,7 @@ export class AgentOrchestrator {
       from: input.from,
       text: input.text,
       messageId: input.messageId ?? "",
+      ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
       raw: input.rawPayload ?? null
     });
   }
@@ -210,6 +228,13 @@ export class AgentOrchestrator {
 
       const history = await this.shortTermMemory.loadConversationHistory(conversation.id);
       const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id);
+      const asanaCompletionReferenceList = shouldUseReplyContext(preparedInput.text)
+        ? await this.loadAsanaCompletionReferenceList({
+            conversationId: conversation.id,
+            replyToMessageId: preparedInput.replyToMessageId,
+            text: preparedInput.text
+          })
+        : null;
       const setupStatus = await this.setupStatusService.getStatus(user);
       const pendingAction = await resolvePendingActionFromConversation(
         this.prisma,
@@ -260,7 +285,7 @@ export class AgentOrchestrator {
       );
       const replyToUser = async (
         message: string,
-        options: { allowSetupHint?: boolean } = {}
+        options: { allowSetupHint?: boolean; rawPayload?: Record<string, unknown> } = {}
       ): Promise<void> => {
         const allowSetupHint = options.allowSetupHint ?? true;
         await this.reply(
@@ -268,7 +293,8 @@ export class AgentOrchestrator {
           preparedInput.from,
           allowSetupHint && appendSetupHint
             ? appendSetupHintToMessage(message, setupStatus)
-            : message
+            : message,
+          options.rawPayload
         );
       };
       const runModelFallback = async (promptSuffix = ""): Promise<string> => {
@@ -389,7 +415,10 @@ export class AgentOrchestrator {
       }
 
       const concreteAsanaCompletion = shouldUseTextShortcuts
-        ? resolveConcreteAsanaCompletionTarget(preparedInput.text, memoryEntries)
+        ? resolveConcreteAsanaCompletionTarget(preparedInput.text, memoryEntries, new Date(), {
+            referenceList: asanaCompletionReferenceList,
+            bypassFreshnessCheck: Boolean(asanaCompletionReferenceList)
+          })
         : null;
       if (concreteAsanaCompletion && integrationConnected(setupStatus, "asana")) {
         if (concreteAsanaCompletion.status === "resolved") {
@@ -421,6 +450,18 @@ export class AgentOrchestrator {
         }
 
         await replyToUser(concreteAsanaCompletion.message);
+        return;
+      }
+
+      if (
+        shouldUseTextShortcuts &&
+        shouldUseReplyContext(preparedInput.text) &&
+        referencesDigestAsanaCluster(preparedInput.text) &&
+        !asanaCompletionReferenceList
+      ) {
+        await replyToUser(
+          "I need the digest or task list with that Asana cluster to apply this safely. Reply to that exact message or ask me to show the cluster first."
+        );
         return;
       }
 
@@ -553,13 +594,15 @@ export class AgentOrchestrator {
           return;
         }
 
+        const tasks = (result.data as AsanaTaskSummary[] | undefined) ?? [];
         await replyToUser(
-          formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+          formatScopedAsanaTaskList(tasks, {
             label: "overdue",
             emptyLabel: "I don't see open overdue Asana tasks.",
             displayLimit: 50,
             emphasizeImportance: true
-          })
+          }),
+          { rawPayload: asanaReplyRawPayload(tasks, "overdue") }
         );
         return;
       }
@@ -855,13 +898,15 @@ export class AgentOrchestrator {
             return;
           }
 
+          const tasks = (result.data as AsanaTaskSummary[] | undefined) ?? [];
           await replyToUser(
-            formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+            formatScopedAsanaTaskList(tasks, {
               label: "from project",
               emptyLabel: `I don't see open Asana tasks in ${projectName}.`,
               scopeName: projectName,
               emphasizeImportance: false
-            })
+            }),
+            { rawPayload: asanaReplyRawPayload(tasks, `project ${projectName}`) }
           );
           return;
         }
@@ -926,13 +971,22 @@ export class AgentOrchestrator {
           return;
         }
 
+        const todayTasks = (todayResult.data as AsanaTaskSummary[] | undefined) ?? [];
+        const latestTask =
+          ((latestOpenResult.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null;
         await replyToUser(
           formatAsanaTodayAndLatestOpenReply(
-            (todayResult.data as AsanaTaskSummary[] | undefined) ?? [],
-            ((latestOpenResult.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null,
+            todayTasks,
+            latestTask,
             user.timezone,
             asanaTodayAndLatestOpen.label
-          )
+          ),
+          {
+            rawPayload: asanaReplyRawPayload(
+              latestTask ? [...todayTasks, latestTask] : todayTasks,
+              `due ${asanaTodayAndLatestOpen.label}`
+            )
+          }
         );
         return;
       }
@@ -979,16 +1033,15 @@ export class AgentOrchestrator {
           return;
         }
 
+        const tasks = (result.data as AsanaTaskSummary[] | undefined) ?? [];
         await replyToUser(
-          formatLatestAsanaTaskReply(
-            ((result.data as AsanaTaskSummary[] | undefined) ?? [])[0] ?? null,
-            {
-              label: asanaLatestShortcut.label,
-              timezone: user.timezone,
-              scopeName: asanaLatestShortcut.project?.name,
-              completed: asanaLatestShortcut.completed
-            }
-          )
+          formatLatestAsanaTaskReply(tasks[0] ?? null, {
+            label: asanaLatestShortcut.label,
+            timezone: user.timezone,
+            scopeName: asanaLatestShortcut.project?.name,
+            completed: asanaLatestShortcut.completed
+          }),
+          { rawPayload: asanaReplyRawPayload(tasks, asanaLatestShortcut.label) }
         );
         return;
       }
@@ -1019,15 +1072,17 @@ export class AgentOrchestrator {
           return;
         }
 
+        const tasks = (result.data as AsanaTaskSummary[] | undefined) ?? [];
         await replyToUser(
-          formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+          formatScopedAsanaTaskList(tasks, {
             label: asanaListShortcut.label,
             emptyLabel: `I don't see ${asanaListShortcut.completed ? "completed" : "open"} Asana tasks ${asanaListShortcut.label}${asanaListShortcut.project ? ` in ${asanaListShortcut.project.name}` : ""}.`,
             scopeName: asanaListShortcut.project?.name,
             completed: asanaListShortcut.completed,
             displayLimit: asanaListShortcut.requestedLimit ?? 20,
             emphasizeImportance: asanaListShortcut.emphasizeImportance
-          })
+          }),
+          { rawPayload: asanaReplyRawPayload(tasks, asanaListShortcut.label) }
         );
         return;
       }
@@ -1061,12 +1116,14 @@ export class AgentOrchestrator {
           return;
         }
 
+        const tasks = (result.data as AsanaTaskSummary[] | undefined) ?? [];
         await replyToUser(
-          formatScopedAsanaTaskList((result.data as AsanaTaskSummary[] | undefined) ?? [], {
+          formatScopedAsanaTaskList(tasks, {
             label: "from My Tasks",
             emptyLabel: "I don't see any open Asana tasks in My Tasks.",
             emphasizeImportance: true
-          })
+          }),
+          { rawPayload: asanaReplyRawPayload(tasks, "from My Tasks") }
         );
         return;
       }
@@ -1099,12 +1156,10 @@ export class AgentOrchestrator {
           return;
         }
 
-        await replyToUser(
-          formatAsanaTaskOverview(
-            (result.data as AsanaTaskSummary[] | undefined) ?? [],
-            genericAsanaTaskOverview
-          )
-        );
+        const tasks = (result.data as AsanaTaskSummary[] | undefined) ?? [];
+        await replyToUser(formatAsanaTaskOverview(tasks, genericAsanaTaskOverview), {
+          rawPayload: asanaReplyRawPayload(tasks, `due ${genericAsanaTaskOverview}`)
+        });
         return;
       }
 
@@ -1123,6 +1178,7 @@ export class AgentOrchestrator {
         from: input.from,
         text: input.text,
         messageId: input.messageId,
+        replyToMessageId: input.replyToMessageId,
         rawPayload: input.raw
       };
     }
@@ -1140,8 +1196,10 @@ export class AgentOrchestrator {
         from: input.from,
         text,
         messageId: input.messageId,
+        replyToMessageId: input.replyToMessageId,
         rawPayload: {
           kind: "image",
+          replyToMessageId: input.replyToMessageId,
           mediaId: input.mediaId,
           mimeType: input.mimeType,
           downloadedMimeType: media.mimeType,
@@ -1175,8 +1233,10 @@ export class AgentOrchestrator {
       from: input.from,
       text: transcription.text,
       messageId: input.messageId,
+      replyToMessageId: input.replyToMessageId,
       rawPayload: {
         kind: "audio",
+        replyToMessageId: input.replyToMessageId,
         mediaId: input.mediaId,
         mimeType: input.mimeType,
         downloadedMimeType: media.mimeType,
@@ -1227,6 +1287,83 @@ export class AgentOrchestrator {
     } catch (error) {
       logger.warn({ error }, "Failed to store WhatsApp image context");
     }
+  }
+
+  private async loadAsanaCompletionReferenceList(input: {
+    conversationId: string;
+    replyToMessageId?: string;
+    text: string;
+  }): Promise<LastVisibleAsanaTaskList | null> {
+    if (input.replyToMessageId) {
+      const quoted = await this.findAssistantMessageByWhatsappId(
+        input.conversationId,
+        input.replyToMessageId
+      );
+      const quotedList = asanaReferenceListFromMessage(quoted, input.text);
+      if (quotedList) return quotedList;
+    }
+
+    if (!referencesDigestAsanaCluster(input.text)) return null;
+
+    const messages = await this.loadRecentAssistantAsanaReferenceMessages(input.conversationId);
+    for (const message of messages) {
+      const list = asanaReferenceListFromMessage(message, input.text);
+      if (list) return list;
+    }
+
+    return null;
+  }
+
+  private async findAssistantMessageByWhatsappId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AssistantAsanaReferenceMessage | null> {
+    const delegate = (this.prisma as any).message;
+    if (!delegate?.findFirst) return null;
+
+    try {
+      const direct = await delegate.findFirst({
+        where: {
+          conversationId,
+          role: MessageRole.ASSISTANT,
+          rawPayload: {
+            path: ["whatsapp", "messageId"],
+            equals: messageId
+          }
+        },
+        orderBy: { createdAt: "desc" }
+      });
+      const mapped = assistantAsanaReferenceMessageFromRecord(direct);
+      if (mapped) return mapped;
+    } catch (error) {
+      logger.warn({ error, messageId }, "Failed direct quoted WhatsApp message lookup");
+    }
+
+    const recent = await this.loadRecentAssistantAsanaReferenceMessages(conversationId, 50);
+    return (
+      recent.find((message) => whatsappMessageIdFromRawPayload(message.rawPayload) === messageId) ??
+      null
+    );
+  }
+
+  private async loadRecentAssistantAsanaReferenceMessages(
+    conversationId: string,
+    take = 10
+  ): Promise<AssistantAsanaReferenceMessage[]> {
+    const delegate = (this.prisma as any).message;
+    if (!delegate?.findMany) return [];
+    const records = await delegate.findMany({
+      where: {
+        conversationId,
+        role: MessageRole.ASSISTANT
+      },
+      orderBy: { createdAt: "desc" },
+      take
+    });
+    if (!Array.isArray(records)) return [];
+    return records
+      .map(assistantAsanaReferenceMessageFromRecord)
+      .filter((message): message is AssistantAsanaReferenceMessage => Boolean(message));
   }
 
   private async executeAsanaListShortcut(input: {
@@ -1289,8 +1426,9 @@ export class AgentOrchestrator {
       tasks: tasks.map((task) => ({
         taskGid: task.gid,
         name: task.name,
-        projectName: task.projects?.[0]?.name,
-        dueOn: task.dueOn
+        ...(task.projects?.[0]?.name ? { projectName: task.projects[0].name } : {}),
+        ...(task.dueOn ? { dueOn: task.dueOn } : {}),
+        completed: task.completed
       })),
       user: input.user,
       conversation: input.conversation,
@@ -1339,13 +1477,26 @@ export class AgentOrchestrator {
   }
 
   private async executeConcreteAsanaCompletion(input: {
-    tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>;
+    tasks: Array<{
+      taskGid: string;
+      name?: string;
+      projectName?: string;
+      dueOn?: string;
+      completed?: boolean;
+    }>;
     user: User;
     conversation: Conversation;
     latestUserMessage: string;
   }): Promise<string> {
-    if (input.tasks.length === 1) {
-      const task = input.tasks[0]!;
+    const alreadyComplete = input.tasks.filter((task) => task.completed === true);
+    const tasksToComplete = input.tasks.filter((task) => task.completed !== true);
+
+    if (!tasksToComplete.length) {
+      return formatConcreteAsanaCompletionMessage([], undefined, alreadyComplete);
+    }
+
+    if (tasksToComplete.length === 1) {
+      const task = tasksToComplete[0]!;
       const result = await this.toolExecutor.executeToolCall(
         "asana_update_task",
         {
@@ -1362,16 +1513,16 @@ export class AgentOrchestrator {
       if (!result.ok) {
         return result.userMessage ?? "I couldn't complete that Asana task.";
       }
-      return formatConcreteAsanaCompletionMessage(input.tasks, result.data);
+      return formatConcreteAsanaCompletionMessage(tasksToComplete, result.data, alreadyComplete);
     }
 
     const result = await this.toolExecutor.executeToolCall(
       "asana_bulk_update_tasks",
       {
-        taskGids: input.tasks.map((task) => task.taskGid),
+        taskGids: tasksToComplete.map((task) => task.taskGid),
         completed: true,
         source: "recent_list",
-        taskPreview: input.tasks
+        taskPreview: tasksToComplete
       },
       {
         user: input.user,
@@ -1385,7 +1536,7 @@ export class AgentOrchestrator {
       return result.userMessage ?? "I couldn't complete those Asana tasks.";
     }
 
-    return formatConcreteAsanaCompletionMessage(input.tasks, result.data);
+    return formatConcreteAsanaCompletionMessage(tasksToComplete, result.data, alreadyComplete);
   }
 
   private async handleConfirmationIntent(input: {
@@ -1492,15 +1643,182 @@ export class AgentOrchestrator {
     });
   }
 
-  private async reply(conversationId: string, to: string, message: string): Promise<void> {
+  private async reply(
+    conversationId: string,
+    to: string,
+    message: string,
+    rawPayload?: Record<string, unknown>
+  ): Promise<void> {
     const safeMessage = normalizeAssistantMessageForUser(message);
+    const result = await this.whatsappService.sendTextMessage(to, safeMessage);
     await persistMessage(this.prisma, {
       conversationId,
       role: MessageRole.ASSISTANT,
-      content: safeMessage
+      content: safeMessage,
+      rawPayload: buildAssistantMessageRawPayload({
+        source: "agent_reply",
+        delivery: {
+          channel: "text",
+          ...(result?.messageId ? { messageId: result.messageId } : {})
+        },
+        ...(rawPayload ? { extra: rawPayload } : {})
+      })
     });
-    await this.whatsappService.sendTextMessage(to, safeMessage);
   }
+}
+
+function shouldUseReplyContext(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  return (
+    /\b(?:complete|mark|finish|done)\b/.test(normalized) &&
+    /\b(?:these|those|them|listed|shown|cluster|items?|tasks?|all)\b/.test(normalized)
+  );
+}
+
+function asanaReplyRawPayload(
+  tasks: AsanaTaskSummary[],
+  scopeLabel: string
+): Record<string, unknown> {
+  return {
+    asanaTaskRefs: asanaTaskRefsFromSummaries(tasks, scopeLabel),
+    asanaScopeLabel: scopeLabel
+  };
+}
+
+function assistantAsanaReferenceMessageFromRecord(
+  record: unknown
+): AssistantAsanaReferenceMessage | null {
+  if (!record || typeof record !== "object") return null;
+  const value = record as { content?: unknown; rawPayload?: unknown; createdAt?: unknown };
+  if (typeof value.content !== "string") return null;
+  const refs = extractAsanaTaskRefsFromRawPayload(value.rawPayload);
+  if (!refs.length) return null;
+  return {
+    content: value.content,
+    rawPayload: value.rawPayload,
+    refs,
+    ...(value.createdAt instanceof Date ? { createdAt: value.createdAt } : {})
+  };
+}
+
+function asanaReferenceListFromMessage(
+  message: AssistantAsanaReferenceMessage | null,
+  userText: string
+): LastVisibleAsanaTaskList | null {
+  if (!message?.refs.length) return null;
+  const clusterRefs = resolveDigestClusterTaskRefs(userText, message);
+  const refs = clusterRefs ?? message.refs;
+  if (!refs.length) return null;
+  return {
+    scopeLabel: clusterRefs ? "quoted digest cluster" : "quoted WhatsApp message",
+    createdAt: new Date().toISOString(),
+    returnedCount: refs.length,
+    storedCount: refs.length,
+    tasks: refs.map((ref) => ({
+      taskGid: ref.taskGid,
+      ...(ref.name ? { name: ref.name } : {}),
+      ...(ref.projectName ? { projectName: ref.projectName } : {}),
+      ...(ref.dueOn ? { dueOn: ref.dueOn } : {}),
+      ...(typeof ref.completed === "boolean" ? { completed: ref.completed } : {})
+    }))
+  };
+}
+
+function referencesDigestAsanaCluster(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  return (
+    /\bcluster\b/.test(normalized) &&
+    /\b(?:overdue|asana|tasks?|may|apr|june|jun)\b/.test(normalized)
+  );
+}
+
+function resolveDigestClusterTaskRefs(
+  userText: string,
+  message: AssistantAsanaReferenceMessage
+): AsanaAssistantTaskRef[] | null {
+  if (!referencesDigestAsanaCluster(userText)) return null;
+  const clusterLine = findDigestClusterLine(userText, message.content);
+  if (!clusterLine) return null;
+
+  const explicitNames = extractDigestClusterNames(clusterLine);
+  const selected = new Map<string, AsanaAssistantTaskRef>();
+  for (const name of explicitNames) {
+    const match = message.refs.find(
+      (ref) => ref.name && normalizeLoose(ref.name) === normalizeLoose(name)
+    );
+    if (match) selected.set(match.taskGid, match);
+  }
+
+  if (/plus\s+a\s+few\s+test\s+items?/i.test(clusterLine)) {
+    const clusterMonthDay = extractMonthDayKey(clusterLine);
+    for (const ref of message.refs) {
+      if (!ref.name || !/\btest\b/i.test(ref.name)) continue;
+      if (clusterMonthDay && extractMonthDayKey(ref.dueOn ?? "") !== clusterMonthDay) continue;
+      selected.set(ref.taskGid, ref);
+    }
+  }
+
+  return selected.size ? Array.from(selected.values()) : null;
+}
+
+function findDigestClusterLine(userText: string, assistantContent: string): string | null {
+  const userMonthDay = extractMonthDayKey(userText);
+  const lines = assistantContent
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return (
+    lines.find((line) => {
+      if (!/\bcluster\b/i.test(line)) return false;
+      if (!userMonthDay) return true;
+      return extractMonthDayKey(line) === userMonthDay;
+    }) ?? null
+  );
+}
+
+function extractDigestClusterNames(line: string): string[] {
+  const afterColon = line.includes(":") ? line.slice(line.indexOf(":") + 1) : line;
+  const withoutVagueTail = afterColon.replace(/\bplus\s+a\s+few\s+test\s+items?.*$/i, "");
+  return withoutVagueTail
+    .split(/\s*,\s*|\s+\band\b\s+/i)
+    .map((value) => value.trim())
+    .filter((value) => value.length >= 2);
+}
+
+function normalizeLoose(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractMonthDayKey(value: string): string | null {
+  const text = value.toLowerCase();
+  const named = text.match(
+    /\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+  );
+  if (named?.[1] && named[2]) {
+    const month = [
+      "jan",
+      "feb",
+      "mar",
+      "apr",
+      "may",
+      "jun",
+      "jul",
+      "aug",
+      "sep",
+      "oct",
+      "nov",
+      "dec"
+    ].findIndex((prefix) => named[1]!.startsWith(prefix));
+    return month >= 0 ? `${String(month + 1).padStart(2, "0")}-${named[2].padStart(2, "0")}` : null;
+  }
+  const iso = text.match(/\b\d{4}-(\d{2})-(\d{2})\b/);
+  return iso?.[1] && iso[2] ? `${iso[1]}-${iso[2]}` : null;
 }
 
 function normalizePhone(phone: string): string {
@@ -2065,12 +2383,36 @@ function formatAsanaDueDateUpdateReply(
 
 function formatConcreteAsanaCompletionMessage(
   tasks: Array<{ taskGid: string; name?: string; projectName?: string; dueOn?: string }>,
-  resultData: unknown
+  resultData: unknown,
+  alreadyComplete: Array<{
+    taskGid: string;
+    name?: string;
+    projectName?: string;
+    dueOn?: string;
+  }> = []
 ): string {
-  const completedText = `Completed ${tasks.length} Asana task${tasks.length === 1 ? "" : "s"}`;
+  const sections: string[] = [];
+  if (tasks.length) {
+    const completedText = `Completed ${tasks.length} Asana task${tasks.length === 1 ? "" : "s"}`;
+    const preview = formatAsanaCompletionPreview(tasks);
+    const recurrenceNote = formatRecurringAsanaCompletionNote(tasks, resultData);
+    sections.push(
+      `${completedText}${preview ? `: ${preview}` : ""}.${recurrenceNote ? `\n${recurrenceNote}` : ""}`
+    );
+  }
+
+  if (alreadyComplete.length) {
+    const preview = formatAsanaCompletionPreview(alreadyComplete);
+    sections.push(
+      `Already complete: ${preview || `${alreadyComplete.length} Asana task${alreadyComplete.length === 1 ? "" : "s"}`}.`
+    );
+  }
+
+  if (sections.length) return sections.join("\n");
+
+  const completedText = "Completed 0 Asana tasks";
   const preview = formatAsanaCompletionPreview(tasks);
-  const recurrenceNote = formatRecurringAsanaCompletionNote(tasks, resultData);
-  return `${completedText}${preview ? `: ${preview}` : ""}.${recurrenceNote ? `\n${recurrenceNote}` : ""}`;
+  return `${completedText}${preview ? `: ${preview}` : ""}.`;
 }
 
 function formatAsanaCompletionPreview(

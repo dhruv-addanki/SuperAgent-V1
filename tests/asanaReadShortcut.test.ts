@@ -559,6 +559,102 @@ describe("asana read shortcut", () => {
     });
   });
 
+  it("resolves pasted task lines against a quoted reference list without partial completion", () => {
+    const memoryEntries = [] as any;
+    const referenceList = {
+      scopeLabel: "quoted WhatsApp message",
+      tasks: [
+        {
+          taskGid: "task_school",
+          name: "Gay Ass Homework",
+          projectName: "School",
+          dueOn: "2026-05-03"
+        },
+        {
+          taskGid: "task_meditate",
+          name: "Meditate",
+          dueOn: "2026-05-03"
+        },
+        {
+          taskGid: "task_test_1",
+          name: "no due project test",
+          dueOn: "2026-05-03"
+        },
+        {
+          taskGid: "task_test_2",
+          name: "no due project test",
+          dueOn: "2026-05-04"
+        }
+      ]
+    };
+
+    expect(
+      resolveConcreteAsanaCompletionTarget(
+        [
+          "mark these complete:",
+          "Gay Ass Homework (School • due 2026-05-03)",
+          "Meditate (No project • due 2026-05-03)",
+          "no due project test (No project • due 2026-05-04)"
+        ].join("\n"),
+        memoryEntries,
+        new Date("2026-05-07T16:00:00.000Z"),
+        { referenceList, bypassFreshnessCheck: true }
+      )
+    ).toMatchObject({
+      status: "resolved",
+      tasks: [{ taskGid: "task_school" }, { taskGid: "task_meditate" }, { taskGid: "task_test_2" }]
+    });
+
+    expect(
+      resolveConcreteAsanaCompletionTarget(
+        [
+          "mark these complete:",
+          "Gay Ass Homework (School • due 2026-05-03)",
+          "Missing task (No project • due 2026-05-03)"
+        ].join("\n"),
+        memoryEntries,
+        new Date("2026-05-07T16:00:00.000Z"),
+        { referenceList, bypassFreshnessCheck: true }
+      )
+    ).toMatchObject({
+      status: "ambiguous",
+      message: expect.stringContaining("I could not resolve every pasted Asana task")
+    });
+  });
+
+  it("does not infer project scope from project names embedded in cluster task titles", () => {
+    const memoryEntries = [
+      {
+        key: "recent_asana_projects",
+        value: [
+          { projectGid: "project_content", name: "Content" },
+          { projectGid: "project_scanis", name: "Scanis-OLD" },
+          { projectGid: "project_school", name: "School" }
+        ],
+        updatedAt: new Date("2026-05-07T14:00:00.000Z")
+      },
+      {
+        key: "recent_asana_tasks",
+        value: [{ taskGid: "task_1", name: "Content Planning", projectName: "Content" }],
+        updatedAt: new Date("2026-05-07T14:00:00.000Z")
+      }
+    ] as any;
+
+    const shortcut = matchAsanaListShortcut(
+      "no i meant this cluster: Older overdue cluster from May 3: Content Planning, Continue Building Onboarding, Gay Ass Homework",
+      [],
+      memoryEntries,
+      "America/New_York",
+      new Date("2026-05-07T16:00:00.000Z")
+    );
+
+    expect(shortcut).toMatchObject({
+      scope: "my_tasks",
+      dueAfter: "2026-05-03"
+    });
+    expect(shortcut?.project).toBeUndefined();
+  });
+
   it("guards stale, broad, and oversized Asana completion targets", () => {
     const memoryEntries = [
       {

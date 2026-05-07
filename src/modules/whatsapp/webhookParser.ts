@@ -26,10 +26,16 @@ export function parseWhatsAppWebhook(payload: any): ParsedWhatsAppWebhook {
       }
 
       for (const message of value?.messages ?? []) {
+        const replyToMessageId =
+          typeof message?.context?.id === "string" && message.context.id.trim()
+            ? message.context.id
+            : undefined;
+
         if (message?.type === "text" && message.text?.body && message.from && message.id) {
           messages.push({
             kind: "text",
             messageId: message.id,
+            ...(replyToMessageId ? { replyToMessageId } : {}),
             from: message.from,
             text: message.text.body,
             timestamp: message.timestamp,
@@ -42,6 +48,7 @@ export function parseWhatsAppWebhook(payload: any): ParsedWhatsAppWebhook {
           messages.push({
             kind: "audio",
             messageId: message.id,
+            ...(replyToMessageId ? { replyToMessageId } : {}),
             from: message.from,
             mediaId: message.audio.id,
             mimeType: message.audio.mime_type,
@@ -57,6 +64,7 @@ export function parseWhatsAppWebhook(payload: any): ParsedWhatsAppWebhook {
           messages.push({
             kind: "image",
             messageId: message.id,
+            ...(replyToMessageId ? { replyToMessageId } : {}),
             from: message.from,
             mediaId: message.image.id,
             mimeType: message.image.mime_type,

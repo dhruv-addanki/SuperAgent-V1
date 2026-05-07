@@ -32,6 +32,12 @@ import { WhatsAppService } from "../whatsapp/whatsappService";
 import { AutomationService, type ClaimedAutomation } from "./automationService";
 import { calendarOverviewWindow, formatCalendarOverview } from "../agent/calendarReadShortcut";
 import { formatScopedAsanaTaskList } from "../agent/asanaReadShortcut";
+import {
+  asanaTaskRefsFromSummaries,
+  buildAssistantMessageRawPayload,
+  type AsanaAssistantTaskRef,
+  type AssistantDeliveryMetadata
+} from "../agent/asanaMessageRefs";
 import type { CalendarEventSummary } from "../google/googleTypes";
 import type { AsanaTaskSummary } from "../asana/asanaTypes";
 
@@ -40,6 +46,16 @@ interface AutomationSchedulerOptions {
   batchSize?: number;
   workerId?: string;
   forceTextDelivery?: boolean;
+}
+
+interface AutomationPromptResult {
+  assistantMessage: string;
+  asanaTaskRefs: AsanaAssistantTaskRef[];
+}
+
+interface AutomationDataSnapshot {
+  sections: string[];
+  asanaTaskRefs: AsanaAssistantTaskRef[];
 }
 
 export class AutomationScheduler {
@@ -132,12 +148,17 @@ export class AutomationScheduler {
         formatAutomationDigest(automation.name, result.assistantMessage)
       );
 
+      const delivery = await this.sendAutomationMessage(automation.user, conversation, outputText);
       await persistMessage(this.prisma, {
         conversationId: conversation.id,
         role: MessageRole.ASSISTANT,
-        content: outputText
+        content: outputText,
+        rawPayload: buildAssistantMessageRawPayload({
+          source: "automation_digest",
+          delivery,
+          asanaTaskRefs: result.asanaTaskRefs
+        })
       });
-      await this.sendAutomationMessage(automation.user, conversation, outputText);
 
       await this.automationService.markRunSuccess({
         automation,
@@ -163,7 +184,7 @@ export class AutomationScheduler {
     automation: Automation,
     user: User,
     conversation: Conversation
-  ) {
+  ): Promise<AutomationPromptResult> {
     const setupStatus = await this.setupStatusService.getStatus(user);
     const preloadedData = await this.buildAutomationDataSnapshot(automation, user, conversation);
     const memoryEntries = filterAutomationContextMemoryEntries(
@@ -173,8 +194,8 @@ export class AutomationScheduler {
       "Run this scheduled automation now.",
       `Automation name: ${automation.name}`,
       `Saved instructions: ${automation.prompt}`,
-      preloadedData.length
-        ? ["Preloaded read-only data for this run:", ...preloadedData].join("\n\n")
+      preloadedData.sections.length
+        ? ["Preloaded read-only data for this run:", ...preloadedData.sections].join("\n\n")
         : "No preloaded data was available for this run.",
       "Return one compact WhatsApp digest. Do not ask follow-up questions unless the automation cannot run."
     ].join("\n");
@@ -192,7 +213,7 @@ export class AutomationScheduler {
       nowIso: new Date().toISOString()
     });
 
-    return runResponseLoop({
+    const result = await runResponseLoop({
       client: this.responsesClient,
       model: env.OPENAI_MODEL,
       instructions: buildScheduledAutomationInstructions(prompt),
@@ -212,15 +233,20 @@ export class AutomationScheduler {
       maxToolRounds: env.MAX_TOOL_ROUNDS,
       continueAfterToolMessages: true
     });
+    return {
+      assistantMessage: result.assistantMessage,
+      asanaTaskRefs: preloadedData.asanaTaskRefs
+    };
   }
 
   private async buildAutomationDataSnapshot(
     automation: Automation,
     user: User,
     conversation: Conversation
-  ): Promise<string[]> {
+  ): Promise<AutomationDataSnapshot> {
     const requestText = `${automation.name}\n${automation.prompt}`.toLowerCase();
     const sections: string[] = [];
+    let asanaTaskRefs: AsanaAssistantTaskRef[] = [];
 
     if (/\b(email|emails|gmail|inbox|mail)\b/.test(requestText)) {
       const result = await this.executeReadOnlyAutomationTool(
@@ -282,9 +308,15 @@ export class AutomationScheduler {
           })
         )
       );
+      if (result.ok) {
+        asanaTaskRefs = asanaTaskRefsFromSummaries(
+          (result.data as AsanaTaskSummary[] | undefined) ?? [],
+          "automation My Tasks"
+        );
+      }
     }
 
-    return sections;
+    return { sections, asanaTaskRefs };
   }
 
   private async executeReadOnlyAutomationTool(
@@ -353,11 +385,11 @@ export class AutomationScheduler {
     user: User,
     conversation: Conversation,
     message: string
-  ): Promise<void> {
+  ): Promise<AssistantDeliveryMetadata> {
     const safeMessage = normalizeAssistantMessageForUser(message);
     if (this.options.forceTextDelivery || (await this.hasRecentInboundMessage(user.id))) {
-      await this.whatsappService.sendTextMessage(user.whatsappPhone, safeMessage);
-      return;
+      const result = await this.whatsappService.sendTextMessage(user.whatsappPhone, safeMessage);
+      return { channel: "text", ...(result?.messageId ? { messageId: result.messageId } : {}) };
     }
 
     if (!env.WHATSAPP_AUTOMATION_TEMPLATE_NAME) {
@@ -368,7 +400,7 @@ export class AutomationScheduler {
       );
     }
 
-    await this.whatsappService.sendTemplateMessage({
+    const result = await this.whatsappService.sendTemplateMessage({
       to: user.whatsappPhone,
       templateName: env.WHATSAPP_AUTOMATION_TEMPLATE_NAME,
       languageCode: env.WHATSAPP_AUTOMATION_TEMPLATE_LANGUAGE,
@@ -379,6 +411,10 @@ export class AutomationScheduler {
       where: { id: conversation.id },
       data: { updatedAt: new Date() }
     });
+    return {
+      channel: "template",
+      ...(result?.messageId ? { messageId: result.messageId } : {})
+    };
   }
 
   private async trySendFailure(
@@ -390,12 +426,16 @@ export class AutomationScheduler {
       const safeMessage = normalizeAssistantMessageForUser(message);
       const targetConversation =
         conversation ?? (await getOrCreateWhatsAppConversation(this.prisma, user.id));
+      const delivery = await this.sendAutomationMessage(user, targetConversation, safeMessage);
       await persistMessage(this.prisma, {
         conversationId: targetConversation.id,
         role: MessageRole.ASSISTANT,
-        content: safeMessage
+        content: safeMessage,
+        rawPayload: buildAssistantMessageRawPayload({
+          source: "automation_failure",
+          delivery
+        })
       });
-      await this.sendAutomationMessage(user, targetConversation, safeMessage);
     } catch (error) {
       logger.warn({ error, userId: user.id }, "Failed to send automation failure notice");
     }

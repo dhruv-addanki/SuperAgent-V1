@@ -10,6 +10,10 @@ import { normalizeAssistantMessageForUser } from "../../lib/messageText";
 import { pendingActionExpiry } from "../../lib/time";
 import { getOrCreateWhatsAppConversation, persistMessage } from "../agent/conversationState";
 import {
+  buildAssistantMessageRawPayload,
+  type AssistantDeliveryMetadata
+} from "../agent/asanaMessageRefs";
+import {
   buildConversationContext,
   formatConversationContextForPrompt
 } from "../agent/conversationContext";
@@ -391,8 +395,12 @@ export class AdminWhatsAppOutboundService {
     const safeMessage = normalizeAssistantMessageForUser(input.message);
     if (await this.hasRecentInboundMessage(input.userId)) {
       const result = await this.whatsappService.sendTextMessage(input.phone, safeMessage);
-      await this.persistDeliveredMessage(input.conversationId, safeMessage);
-      return { channel: "text", messageId: result.messageId };
+      const delivery: AssistantDeliveryMetadata = {
+        channel: "text",
+        ...(result.messageId ? { messageId: result.messageId } : {})
+      };
+      await this.persistDeliveredMessage(input.conversationId, safeMessage, delivery);
+      return delivery;
     }
 
     const templateName = this.options.templateName ?? env.WHATSAPP_AUTOMATION_TEMPLATE_NAME;
@@ -412,15 +420,27 @@ export class AdminWhatsAppOutboundService {
       languageCode: templateLanguage,
       bodyParameters: [safeMessage]
     });
-    await this.persistDeliveredMessage(input.conversationId, safeMessage);
-    return { channel: "template", messageId: result.messageId };
+    const delivery: AssistantDeliveryMetadata = {
+      channel: "template",
+      ...(result.messageId ? { messageId: result.messageId } : {})
+    };
+    await this.persistDeliveredMessage(input.conversationId, safeMessage, delivery);
+    return delivery;
   }
 
-  private async persistDeliveredMessage(conversationId: string, content: string): Promise<void> {
+  private async persistDeliveredMessage(
+    conversationId: string,
+    content: string,
+    delivery: AssistantDeliveryMetadata
+  ): Promise<void> {
     await persistMessage(this.prisma, {
       conversationId,
       role: MessageRole.ASSISTANT,
-      content
+      content,
+      rawPayload: buildAssistantMessageRawPayload({
+        source: "admin_outbound",
+        delivery
+      })
     });
     await this.prisma.conversation.update({
       where: { id: conversationId },

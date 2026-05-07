@@ -87,6 +87,11 @@ export type AsanaCompletionTargetResolution =
       message: string;
     };
 
+export interface AsanaCompletionReferenceOptions {
+  referenceList?: LastVisibleAsanaTaskList | null;
+  bypassFreshnessCheck?: boolean;
+}
+
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
   jan: 0,
@@ -333,12 +338,13 @@ export function lastVisibleAsanaTaskList(
 export function resolveConcreteAsanaCompletionTarget(
   text: string,
   memoryEntries: PromptMemoryEntry[],
-  now = new Date()
+  now = new Date(),
+  options: AsanaCompletionReferenceOptions = {}
 ): AsanaCompletionTargetResolution | null {
   const normalized = normalizeCompletionText(text);
   if (!asksToCompleteAsanaTask(normalized)) return null;
 
-  const recentList = lastVisibleAsanaTaskList(memoryEntries);
+  const recentList = options.referenceList ?? lastVisibleAsanaTaskList(memoryEntries);
   if (isBroadAsanaCompletionRequest(normalized)) {
     if (!recentList && hasLegacyRecentAsanaTasks(memoryEntries)) return null;
     return {
@@ -355,7 +361,7 @@ export function resolveConcreteAsanaCompletionTarget(
     };
   }
 
-  if (!isFreshAsanaTaskList(recentList, now)) {
+  if (!options.bypassFreshnessCheck && !isFreshAsanaTaskList(recentList, now)) {
     return {
       status: "stale",
       message:
@@ -369,6 +375,39 @@ export function resolveConcreteAsanaCompletionTarget(
       status: "empty",
       message: "The last Asana task list I showed had no tasks to complete."
     };
+  }
+
+  if (options.referenceList && referencesClusterCompletionTarget(normalized)) {
+    if (tasks.length > 25) {
+      return {
+        status: "too_many",
+        message:
+          "That Asana cluster is too large for an automatic bulk completion. Narrow it to 25 tasks or fewer."
+      };
+    }
+    return { status: "resolved", tasks };
+  }
+
+  const explicitPastedTargets = resolveExplicitPastedCompletionTargets(text, tasks);
+  if (explicitPastedTargets === "too_many") {
+    return {
+      status: "too_many",
+      message:
+        "That pasted Asana task list is too large for an automatic bulk completion. Narrow it to 25 tasks or fewer."
+    };
+  }
+  if (explicitPastedTargets && "unresolved" in explicitPastedTargets) {
+    return {
+      status: "ambiguous",
+      message: [
+        "I could not resolve every pasted Asana task, so I did not complete a partial list.",
+        `Unresolved: ${explicitPastedTargets.unresolved.join("; ")}`,
+        "Ask me to show the tasks again or reply to the exact task list."
+      ].join("\n")
+    };
+  }
+  if (explicitPastedTargets?.length) {
+    return { status: "resolved", tasks: explicitPastedTargets };
   }
 
   const firstShownTargets = resolveFirstShownCompletionTargets(normalized, tasks);
@@ -974,14 +1013,15 @@ function resolveScope(
     return { scope: "my_tasks" };
   }
 
-  const project = resolveRecentProjectFromText(normalizedText, memoryEntries);
-  if (project) {
-    return { scope: "project", project };
-  }
-
   const projectName = extractProjectNameFromTaskListText(text);
   if (projectName) {
-    return { scope: "project", project: { name: projectName } };
+    const project = resolveRecentProjectByName(projectName, memoryEntries);
+    return { scope: "project", project: project ?? { name: projectName } };
+  }
+
+  const project = resolveRecentProjectFromExplicitText(normalizedText, memoryEntries);
+  if (project) {
+    return { scope: "project", project };
   }
 
   return { scope: "my_tasks" };
@@ -1257,13 +1297,34 @@ function recentAsanaProjects(memoryEntries: PromptMemoryEntry[]): ResolvedAsanaP
     .filter((value): value is ResolvedAsanaProjectShortcut => value !== null);
 }
 
-function resolveRecentProjectFromText(
+function resolveRecentProjectByName(
+  projectName: string,
+  memoryEntries: PromptMemoryEntry[]
+): ResolvedAsanaProjectShortcut | null {
+  const normalizedProjectName = normalize(projectName);
+  return (
+    recentAsanaProjects(memoryEntries).find(
+      (project) => normalize(project.name) === normalizedProjectName
+    ) ?? null
+  );
+}
+
+function resolveRecentProjectFromExplicitText(
   normalizedText: string,
   memoryEntries: PromptMemoryEntry[]
 ): ResolvedAsanaProjectShortcut | null {
-  const candidates = recentAsanaProjects(memoryEntries).filter((project) =>
-    new RegExp(`(^|\\b)${escapeRegExp(project.name.toLowerCase())}(\\b|$)`).test(normalizedText)
-  );
+  const candidates = recentAsanaProjects(memoryEntries).filter((project) => {
+    const name = escapeRegExp(project.name.toLowerCase());
+    return (
+      new RegExp(
+        `\\b(?:in|inside|under|from|for)\\s+(?:the\\s+)?(?:asana\\s+)?project\\s+${name}\\b`
+      ).test(normalizedText) ||
+      new RegExp(`\\b(?:in|inside|under|from|for)\\s+(?:the\\s+)?${name}\\s+project\\b`).test(
+        normalizedText
+      ) ||
+      new RegExp(`\\btasks?\\s+in\\s+${name}\\b`).test(normalizedText)
+    );
+  });
 
   if (!candidates.length) return null;
   candidates.sort((left, right) => right.name.length - left.name.length);
@@ -1364,6 +1425,7 @@ function asksToCompleteAsanaTask(normalizedText: string): boolean {
 
 function isBroadAsanaCompletionRequest(normalizedText: string): boolean {
   if (referencesAllListedTasks(normalizedText)) return false;
+  if (/\bcluster\b/.test(normalizedText)) return false;
   return (
     /\b(?:all|every)\s+(?:open\s+|incomplete\s+|overdue\s+)?(?:asana\s+)?tasks?\b/.test(
       normalizedText
@@ -1371,6 +1433,10 @@ function isBroadAsanaCompletionRequest(normalizedText: string): boolean {
     /\bcomplete\s+(?:all|every)\b/.test(normalizedText) ||
     /\bmark\s+(?:all|every)\b.*\b(?:complete|done|finished)\b/.test(normalizedText)
   );
+}
+
+function referencesClusterCompletionTarget(normalizedText: string): boolean {
+  return /\bcluster\b/.test(normalizedText) && /\b(?:complete|mark|finish)\b/.test(normalizedText);
 }
 
 function hasLegacyRecentAsanaTasks(memoryEntries: PromptMemoryEntry[]): boolean {
@@ -1519,6 +1585,128 @@ function resolveNamedCompletionTargets(
     return "ambiguous";
   }
   return matches;
+}
+
+function resolveExplicitPastedCompletionTargets(
+  text: string,
+  tasks: LastVisibleAsanaTaskList["tasks"]
+): LastVisibleAsanaTaskList["tasks"] | { unresolved: string[] } | "too_many" | null {
+  const requests = extractPastedAsanaTaskLines(text);
+  if (!requests.length) return null;
+  if (requests.length > 25) return "too_many";
+
+  const selected: LastVisibleAsanaTaskList["tasks"] = [];
+  const unresolved: string[] = [];
+  const usedGids = new Set<string>();
+
+  for (const request of requests) {
+    const candidates = tasks.filter((task) => pastedTaskMatchesReference(request, task, usedGids));
+    if (!candidates.length) {
+      unresolved.push(formatPastedTaskRequest(request));
+      continue;
+    }
+
+    candidates.sort((left, right) => {
+      const leftScore = pastedTaskMatchScore(request, left);
+      const rightScore = pastedTaskMatchScore(request, right);
+      return rightScore - leftScore;
+    });
+    const selectedTask = candidates[0]!;
+    selected.push(selectedTask);
+    usedGids.add(selectedTask.taskGid);
+  }
+
+  if (unresolved.length) return { unresolved };
+  return selected;
+}
+
+function extractPastedAsanaTaskLines(text: string): Array<{
+  name: string;
+  projectName?: string;
+  dueOn?: string;
+}> {
+  const requests: Array<{ name: string; projectName?: string; dueOn?: string }> = [];
+  const pattern = /([^()\n\r]{2,140}?)\s*\(([^()\n\r]*?)\s*[•·-]\s*due\s+(\d{4}-\d{2}-\d{2})\)/g;
+
+  for (const match of text.matchAll(pattern)) {
+    const name = cleanupPastedAsanaTaskName(match[1] ?? "");
+    const dueOn = match[3];
+    if (!name || !dueOn) continue;
+    const projectName = cleanupPastedAsanaProjectName(match[2] ?? "");
+    requests.push({
+      name,
+      ...(projectName ? { projectName } : {}),
+      dueOn
+    });
+  }
+
+  return requests;
+}
+
+function cleanupPastedAsanaTaskName(value: string): string | null {
+  const cleaned = value
+    .replace(/[\u2000-\u206F\uFEFF]/g, " ")
+    .replace(/^.*?\bmark\s+these\s+complete\s*:\s*/i, "")
+    .replace(/^.*?\bmark\s+all\s+these\s+(?:as\s+)?complete\s*:\s*/i, "")
+    .replace(/^\s*(?:[-*•]\s*)?\d{1,2}[.)]?\s*/g, "")
+    .replace(/^["'`.,:;\s-]+|["'`.,:;\s-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length >= 2 ? cleaned : null;
+}
+
+function cleanupPastedAsanaProjectName(value: string): string | null {
+  const cleaned = value
+    .replace(/[\u2000-\u206F\uFEFF]/g, " ")
+    .replace(/\bno project\b/i, "")
+    .replace(/^["'`.,:;\s-]+|["'`.,:;\s-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || null;
+}
+
+function pastedTaskMatchesReference(
+  request: { name: string; projectName?: string; dueOn?: string },
+  task: LastVisibleAsanaTaskList["tasks"][number],
+  usedGids: Set<string>
+): boolean {
+  if (usedGids.has(task.taskGid)) return false;
+  if (!task.name) return false;
+  if (normalizeCompletionText(task.name) !== normalizeCompletionText(request.name)) return false;
+  if (request.dueOn && task.dueOn !== request.dueOn) return false;
+  if (
+    request.projectName &&
+    normalizeCompletionText(task.projectName ?? "") !== normalizeCompletionText(request.projectName)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function pastedTaskMatchScore(
+  request: { projectName?: string; dueOn?: string },
+  task: LastVisibleAsanaTaskList["tasks"][number]
+): number {
+  let score = 1;
+  if (request.dueOn && task.dueOn === request.dueOn) score += 2;
+  if (
+    request.projectName &&
+    normalizeCompletionText(task.projectName ?? "") === normalizeCompletionText(request.projectName)
+  ) {
+    score += 2;
+  }
+  return score;
+}
+
+function formatPastedTaskRequest(request: {
+  name: string;
+  projectName?: string;
+  dueOn?: string;
+}): string {
+  const details = [request.projectName, request.dueOn ? `due ${request.dueOn}` : undefined]
+    .filter(Boolean)
+    .join(" • ");
+  return `${request.name}${details ? ` (${details})` : ""}`;
 }
 
 function formatTaskLine(task: AsanaTaskSummary): string {

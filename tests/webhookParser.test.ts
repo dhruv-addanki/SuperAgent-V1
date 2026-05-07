@@ -14,6 +14,7 @@ describe("WhatsApp webhook parser", () => {
                     id: "wamid.1",
                     from: "15555550100",
                     timestamp: "1776700000",
+                    context: { id: "wamid.reply-target" },
                     type: "text",
                     text: { body: "What's on my calendar tomorrow?" }
                   },
@@ -60,6 +61,7 @@ describe("WhatsApp webhook parser", () => {
     expect(parsed.messages).toHaveLength(3);
     expect(parsed.messages[0]).toMatchObject({
       kind: "text",
+      replyToMessageId: "wamid.reply-target",
       text: expect.stringContaining("calendar")
     });
     expect(parsed.messages[1]).toMatchObject({
