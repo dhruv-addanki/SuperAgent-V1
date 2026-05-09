@@ -17,6 +17,7 @@ export interface ConversationContext {
   recentResults: string[];
   pendingActionSummary: string;
   routeSummary: string;
+  personalContextGraph: string[];
   communicationHints: string[];
   userPreferences: string[];
 }
@@ -28,6 +29,7 @@ export function buildConversationContext(input: {
   pendingActionSummary: string;
   userProfile?: string[];
   intentRoute?: IntentRoute;
+  personalContextGraph?: string[];
 }): ConversationContext {
   const hasIntentRoute = Boolean(input.intentRoute);
   const messageApps = hasIntentRoute ? [] : detectReferencedApps(input.latestUserMessage);
@@ -156,6 +158,7 @@ export function buildConversationContext(input: {
     routeSummary: input.intentRoute
       ? formatIntentRouteForPrompt(input.intentRoute)
       : "No central intent route was provided.",
+    personalContextGraph: (input.personalContextGraph ?? []).slice(0, 8),
     communicationHints: Array.from(communicationHints).slice(0, 6),
     userPreferences: userPreferences.slice(0, 4)
   };
@@ -242,6 +245,10 @@ export function formatConversationContextForPrompt(context: ConversationContext)
     context.routeSummary,
     "Pending action summary:",
     context.pendingActionSummary,
+    "Personal context graph:",
+    context.personalContextGraph.length
+      ? context.personalContextGraph.map((line) => `- ${line}`).join("\n")
+      : "- None",
     "Communication hints:",
     context.communicationHints.length
       ? context.communicationHints.map((line) => `- ${line}`).join("\n")

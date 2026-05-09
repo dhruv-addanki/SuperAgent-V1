@@ -37,6 +37,7 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "automation_resume")).toBe(false);
     expect(tools.some((tool) => tool.name === "automation_delete")).toBe(false);
     expect(tools.some((tool) => tool.name === "web_search")).toBe(true);
+    expect(tools.some((tool) => tool.name === "context_graph_search")).toBe(true);
     expect(tools.some((tool) => tool.name === "calendar_list_events")).toBe(true);
     expect(tools.some((tool) => tool.name === "docs_read_document")).toBe(true);
     expect(tools.some((tool) => tool.name === "asana_list_my_tasks")).toBe(true);

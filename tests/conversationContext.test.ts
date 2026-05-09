@@ -262,4 +262,23 @@ describe("conversation context", () => {
       "Response preferences: concise, direct, bullets, minimal follow-ups, human-like, no em dashes, no casual dash separators, style: warm casual, personality: calm operator"
     );
   });
+
+  it("includes bounded read-only personal context graph lines", () => {
+    const context = buildConversationContext({
+      latestUserMessage: "what should I focus on for Scann today?",
+      memoryEntries: [],
+      pendingAction: null,
+      pendingActionSummary: "No pending actions.",
+      personalContextGraph: [
+        "[project] Scann (0.99 confidence). AI body scanning startup context.",
+        "[entity] Swift (0.98 confidence). iOS implementation context."
+      ]
+    });
+
+    const formatted = formatConversationContextForPrompt(context);
+
+    expect(formatted).toContain("Personal context graph:");
+    expect(formatted).toContain("[project] Scann");
+    expect(formatted).toContain("[entity] Swift");
+  });
 });

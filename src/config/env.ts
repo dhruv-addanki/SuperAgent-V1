@@ -10,6 +10,15 @@ const booleanFromString = z
     return ["1", "true", "yes", "on"].includes(value.toLowerCase());
   });
 
+const booleanFromStringDefaultTrue = z
+  .union([z.boolean(), z.string()])
+  .optional()
+  .default(true)
+  .transform((value) => {
+    if (typeof value === "boolean") return value;
+    return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+  });
+
 const optionalBooleanFromString = z
   .union([z.boolean(), z.string()])
   .optional()
@@ -65,6 +74,13 @@ const envSchema = z
     NOTION_CLIENT_SECRET: z.string().min(1).default("dev-notion-client-secret"),
     NOTION_REDIRECT_URI: z.string().url().default("http://localhost:3000/auth/notion/callback"),
     READ_ONLY_MODE: booleanFromString,
+
+    OBSIDIAN_CONTEXT_GRAPH_PATH: z
+      .string()
+      .optional()
+      .default("/Users/dhruv/Projects/ObsidianVault/Context Graph"),
+    OBSIDIAN_CONTEXT_GRAPH_AUTO_SYNC: booleanFromStringDefaultTrue,
+    OBSIDIAN_CONTEXT_GRAPH_SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(900),
 
     ENCRYPTION_KEY: z.string().min(1).default("dev-only-change-me"),
 

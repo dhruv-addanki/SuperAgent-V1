@@ -159,6 +159,14 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  context_graph_search: z
+    .object({
+      query: z.string().min(1),
+      types: z.array(z.string().min(1)).max(12).optional(),
+      limit: z.number().int().positive().max(12).optional()
+    })
+    .strict(),
+
   docs_read_document: z
     .object({
       documentId: z.string().min(1)
@@ -412,6 +420,8 @@ export const toolDescriptions: Record<ToolName, string> = {
   drive_delete_file: "Move a Google Drive file, including a Google Doc, to trash by file ID.",
   web_search:
     "Search the public web for current factual information and return a concise summary with source URLs.",
+  context_graph_search:
+    "Search the user's read-only Obsidian personal context graph for relevant projects, entities, preferences, artifacts, decisions, and prior context. Use this for deeper personalization or when the user asks what context is known.",
   docs_read_document: "Read the contents of a Google Doc by document ID.",
   docs_append_document:
     "Append content to an existing Google Doc by document ID. Use this when the user refers to an existing/current/same doc.",
@@ -463,6 +473,7 @@ export const readOnlyToolNames = [
   "gmail_search_threads",
   "gmail_read_thread",
   "web_search",
+  "context_graph_search",
   "calendar_list_calendars",
   "calendar_list_events",
   "drive_search_files",

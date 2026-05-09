@@ -19,6 +19,7 @@ import {
 } from "../agent/conversationContext";
 import { ShortTermMemory } from "../memory/shortTermMemory";
 import { LongTermMemory } from "../memory/longTermMemory";
+import { ObsidianContextGraphService } from "../contextGraph/obsidianContextGraphService";
 import { WhatsAppService } from "../whatsapp/whatsappService";
 
 export type AdminOutboundMode = "exact" | "draft" | "auto";
@@ -84,6 +85,7 @@ export class AdminWhatsAppOutboundService {
   private readonly audit: AuditService;
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
+  private readonly contextGraphService: ObsidianContextGraphService;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -94,6 +96,7 @@ export class AdminWhatsAppOutboundService {
     this.audit = new AuditService(prisma);
     this.shortTermMemory = new ShortTermMemory(prisma);
     this.longTermMemory = new LongTermMemory(prisma);
+    this.contextGraphService = new ObsidianContextGraphService(prisma);
   }
 
   async submit(input: SubmitAdminOutboundInput): Promise<AdminOutboundResult> {
@@ -342,12 +345,14 @@ export class AdminWhatsAppOutboundService {
   ): Promise<string> {
     const history = await this.shortTermMemory.loadConversationHistory(conversationId, 12);
     const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(user.id, 10);
+    const personalContextGraph = await this.loadPersonalContextGraphForDraft(user.id, instruction);
     const conversationContext = buildConversationContext({
       latestUserMessage: instruction,
       memoryEntries,
       pendingAction: null,
       pendingActionSummary: "No pending actions.",
-      userProfile: [`Phone: ${user.whatsappPhone}`, `Timezone: ${user.timezone}`]
+      userProfile: [`Phone: ${user.whatsappPhone}`, `Timezone: ${user.timezone}`],
+      personalContextGraph
     });
     const response = await this.responsesClient.createResponse({
       model: env.OPENAI_MODEL,
@@ -384,6 +389,21 @@ export class AdminWhatsAppOutboundService {
       );
     }
     return draft;
+  }
+
+  private async loadPersonalContextGraphForDraft(
+    userId: string,
+    instruction: string
+  ): Promise<string[]> {
+    try {
+      return await this.contextGraphService.getPromptContextLines(userId, instruction, {
+        limit: 5,
+        includeAgentContext: true,
+        fallbackHighSignal: false
+      });
+    } catch {
+      return [];
+    }
   }
 
   private async deliver(input: {

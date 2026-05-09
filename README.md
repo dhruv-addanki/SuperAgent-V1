@@ -19,6 +19,7 @@ The service is a single Fastify backend with clear module boundaries:
 - Transport: WhatsApp Cloud API webhook verification, inbound parsing, outbound text replies, and delivery status logging.
 - Auth: Google OAuth 2.0 and Asana OAuth web-server flows, encrypted token storage, and automatic refresh before API calls.
 - Agent orchestration: OpenAI Responses API loop, backend-owned tool execution, short-term history, and lightweight memory.
+- Personal context: optional read-only Obsidian Personal Context Graph indexing for better user/project reasoning.
 - Integrations: Gmail, Calendar, Drive, Docs, and Asana task service wrappers.
 - Safety: deterministic approval policy, pending action records, audit logs, idempotency checks, and read-only mode.
 - Persistence: PostgreSQL via Prisma, Redis for webhook idempotency/rate limiting, and BullMQ for inbound WhatsApp jobs.
@@ -159,6 +160,18 @@ Notion:
 - `NOTION_CLIENT_ID`: OAuth client ID for a Notion public integration.
 - `NOTION_CLIENT_SECRET`: OAuth client secret.
 - `NOTION_REDIRECT_URI`: Usually `http://localhost:3000/auth/notion/callback` for local dev.
+
+Obsidian context graph:
+
+- `OBSIDIAN_CONTEXT_GRAPH_PATH`: Local path to the managed Obsidian `Context Graph` folder.
+- `OBSIDIAN_CONTEXT_GRAPH_AUTO_SYNC`: Set `true` to refresh the local index automatically during agent runs.
+- `OBSIDIAN_CONTEXT_GRAPH_SYNC_INTERVAL_SECONDS`: Minimum seconds between automatic refreshes per user.
+
+The Obsidian graph bridge is read-only from the vault side. SuperAgent indexes managed graph notes into PostgreSQL and uses only compact retrieved context in prompts. To force a manual refresh:
+
+```bash
+pnpm sync:obsidian-context
+```
 
 Write control:
 

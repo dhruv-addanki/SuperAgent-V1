@@ -20,6 +20,7 @@ import { GoogleTokenService } from "../google/tokenService";
 import { NotionTokenService } from "../notion/tokenService";
 import { LongTermMemory } from "../memory/longTermMemory";
 import { SetupStatusService, setupStatusProfileLines } from "../agent/setupStatusService";
+import { ObsidianContextGraphService } from "../contextGraph/obsidianContextGraphService";
 import {
   buildConversationContext,
   formatConversationContextForPrompt,
@@ -34,7 +35,8 @@ import { AutomationService, type ClaimedAutomation } from "./automationService";
 import {
   buildDailyBriefingSnapshot,
   formatDailyBriefingSnapshotForPrompt,
-  lastDailyBriefingDebugMemoryValue
+  lastDailyBriefingDebugMemoryValue,
+  type DailyBriefingSnapshot
 } from "./dailyBriefing";
 import { calendarOverviewWindow } from "../agent/calendarReadShortcut";
 import {
@@ -60,12 +62,14 @@ interface AutomationPromptResult {
 interface AutomationDataSnapshot {
   sections: string[];
   asanaTaskRefs: AsanaAssistantTaskRef[];
+  personalContextGraph: string[];
 }
 
 export class AutomationScheduler {
   private readonly automationService: AutomationService;
   private readonly toolExecutor: ToolExecutor;
   private readonly longTermMemory: LongTermMemory;
+  private readonly contextGraphService: ObsidianContextGraphService;
   private readonly setupStatusService: SetupStatusService;
   private readonly pollIntervalSeconds: number;
   private readonly batchSize: number;
@@ -87,6 +91,7 @@ export class AutomationScheduler {
       new NotionTokenService(prisma)
     );
     this.longTermMemory = new LongTermMemory(prisma);
+    this.contextGraphService = new ObsidianContextGraphService(prisma);
     this.setupStatusService = new SetupStatusService(prisma);
     this.pollIntervalSeconds = options.pollIntervalSeconds ?? env.AUTOMATION_POLL_INTERVAL_SECONDS;
     this.batchSize = options.batchSize ?? env.AUTOMATION_BATCH_SIZE;
@@ -213,7 +218,8 @@ export class AutomationScheduler {
       memoryEntries,
       pendingAction: null,
       pendingActionSummary: "No pending actions.",
-      userProfile: setupStatusProfileLines(setupStatus, user.timezone)
+      userProfile: setupStatusProfileLines(setupStatus, user.timezone),
+      personalContextGraph: preloadedData.personalContextGraph
     });
     const prompt = buildSystemPrompt({
       timezone: automation.timezone || user.timezone,
@@ -319,8 +325,62 @@ export class AutomationScheduler {
     });
     sections.push(formatDailyBriefingSnapshotForPrompt(briefingSnapshot));
     await this.rememberLastDailyBriefingDebug(user.id, briefingSnapshot);
+    const personalContextGraph = await this.loadPersonalContextGraphForAutomation(
+      user.id,
+      automation,
+      briefingSnapshot
+    );
+    if (personalContextGraph.length) {
+      sections.push(
+        [
+          "Read-only Obsidian personal context graph:",
+          "Use this to connect today's email, calendar, and Asana facts to known user projects and preferences. Do not claim any graph edits.",
+          ...personalContextGraph.map((line) => `- ${line}`)
+        ].join("\n")
+      );
+    }
 
-    return { sections, asanaTaskRefs };
+    return { sections, asanaTaskRefs, personalContextGraph };
+  }
+
+  private async loadPersonalContextGraphForAutomation(
+    userId: string,
+    automation: Automation,
+    snapshot: DailyBriefingSnapshot
+  ): Promise<string[]> {
+    const factText = snapshot.selectedFacts
+      .slice(0, 18)
+      .map((fact) =>
+        [
+          fact.source,
+          fact.title,
+          fact.summary,
+          fact.sourceName,
+          fact.projectName,
+          fact.category,
+          fact.reasons.join(" ")
+        ]
+          .filter(Boolean)
+          .join(" ")
+      )
+      .join("\n");
+    const query = [automation.name, automation.prompt, factText, snapshot.links.join("\n")]
+      .filter(Boolean)
+      .join("\n");
+
+    try {
+      return await this.contextGraphService.getPromptContextLines(userId, query, {
+        limit: 8,
+        includeAgentContext: true,
+        fallbackHighSignal: true
+      });
+    } catch (error) {
+      logger.warn(
+        { error, automationId: automation.id },
+        "Failed to load Obsidian context graph for automation"
+      );
+      return [];
+    }
   }
 
   private async rememberLastDailyBriefingDebug(
@@ -504,6 +564,7 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
     "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
     "- The preloaded Daily briefing intelligence section is already filtered and scored by backend rules. Do not resurrect suppressed facts, excluded calendars, read/low-signal emails, all-day task-like calendar items, or low-priority duplicate/test tasks.",
+    "- The preloaded Obsidian personal context graph section is read-only background. Use it to connect facts to known projects, artifacts, and preferences, but never claim you edited Obsidian.",
     "- Use score reasons to explain importance. A stale due date alone is not importance.",
     "- When a selected email, event, and task appear linked, combine them into one concrete next action instead of listing disconnected facts.",
     "- If structured conversation context conflicts with preloaded read-only data, trust the preloaded data for this run.",

@@ -20,6 +20,10 @@ import { GoogleTokenService } from "../google/tokenService";
 import { NotionTokenService } from "../notion/tokenService";
 import { LongTermMemory, type AssistantResponsePreferences } from "../memory/longTermMemory";
 import {
+  ObsidianContextGraphService,
+  type ObsidianContextGraphSearchResult
+} from "../contextGraph/obsidianContextGraphService";
+import {
   buildDailyBriefingSnapshot,
   digestFilterRulesFromMemory,
   formatDigestRulesForUser,
@@ -141,6 +145,7 @@ export class AgentOrchestrator {
   private readonly toolExecutor: ToolExecutor;
   private readonly shortTermMemory: ShortTermMemory;
   private readonly longTermMemory: LongTermMemory;
+  private readonly contextGraphService: ObsidianContextGraphService;
   private readonly setupStatusService: SetupStatusService;
   private readonly whatsappMediaService: Pick<
     WhatsAppMediaService,
@@ -165,6 +170,7 @@ export class AgentOrchestrator {
     );
     this.shortTermMemory = new ShortTermMemory(prisma);
     this.longTermMemory = new LongTermMemory(prisma);
+    this.contextGraphService = new ObsidianContextGraphService(prisma);
     this.setupStatusService = new SetupStatusService(prisma);
     this.whatsappMediaService = options.whatsappMediaService ?? new WhatsAppMediaService();
     this.audioTranscriptionService =
@@ -306,13 +312,18 @@ export class AgentOrchestrator {
         );
       };
       const runModelFallback = async (promptSuffix = ""): Promise<string> => {
+        const personalContextGraph = await this.loadPersonalContextGraphForPrompt(
+          user.id,
+          preparedInput.text
+        );
         const conversationContext = buildConversationContext({
           latestUserMessage: preparedInput.text,
           memoryEntries,
           pendingAction,
           pendingActionSummary,
           userProfile: setupStatusProfileLines(setupStatus, user.timezone),
-          intentRoute
+          intentRoute,
+          personalContextGraph
         });
         const prompt = buildSystemPrompt({
           timezone: user.timezone,
@@ -1677,6 +1688,11 @@ export class AgentOrchestrator {
       memoryEntries,
       timezone: input.user.timezone
     });
+    const personalContextGraph = await this.loadPersonalContextGraphForDigest(
+      input.user.id,
+      input.latestUserMessage,
+      briefingSnapshot
+    );
     await this.prisma.memoryEntry.upsert({
       where: { userId_key: { userId: input.user.id, key: "last_daily_briefing_debug" } },
       update: {
@@ -1696,8 +1712,52 @@ export class AgentOrchestrator {
       calendarResult,
       asanaResult,
       timezone: input.user.timezone,
-      briefingSnapshot
+      briefingSnapshot,
+      personalContextGraph
     });
+  }
+
+  private async loadPersonalContextGraphForPrompt(
+    userId: string,
+    query: string
+  ): Promise<string[]> {
+    try {
+      return await this.contextGraphService.getPromptContextLines(userId, query, {
+        limit: 7,
+        includeAgentContext: true,
+        fallbackHighSignal: true
+      });
+    } catch (error) {
+      logger.warn({ error }, "Failed to load Obsidian context graph for prompt");
+      return [];
+    }
+  }
+
+  private async loadPersonalContextGraphForDigest(
+    userId: string,
+    latestUserMessage: string,
+    snapshot: DailyBriefingSnapshot
+  ): Promise<ObsidianContextGraphSearchResult[]> {
+    const factText = snapshot.selectedFacts
+      .slice(0, 18)
+      .map((fact) =>
+        [fact.source, fact.title, fact.summary, fact.sourceName, fact.projectName, fact.category]
+          .filter(Boolean)
+          .join(" ")
+      )
+      .join("\n");
+    try {
+      return (
+        await this.contextGraphService.search(userId, `${latestUserMessage}\n${factText}`, {
+          limit: 5,
+          includeAgentContext: false,
+          fallbackHighSignal: false
+        })
+      ).filter((node) => node.type !== "agent_context");
+    } catch (error) {
+      logger.warn({ error }, "Failed to load Obsidian context graph for one-time digest");
+      return [];
+    }
   }
 
   private async reply(
@@ -2029,6 +2089,7 @@ function formatOneTimeMorningDigest(input: {
   asanaResult: ToolExecutionResult;
   timezone: string;
   briefingSnapshot?: DailyBriefingSnapshot;
+  personalContextGraph?: ObsidianContextGraphSearchResult[];
 }): string {
   const sections = [
     "Morning email, calendar, and Asana digest",
@@ -2091,6 +2152,11 @@ function formatOneTimeMorningDigest(input: {
     );
   }
 
+  const contextLinks = formatOneTimeDigestContextLinks(input.personalContextGraph ?? []);
+  if (contextLinks.length) {
+    sections.push(["Context links:", ...contextLinks.map((line) => `• ${line}`)].join("\n"));
+  }
+
   const actionItems = formatOneTimeDigestActionItems(input);
   if (actionItems.length) {
     sections.push(
@@ -2106,6 +2172,19 @@ function formatOneTimeMorningDigest(input: {
   }
 
   return sections.join("\n\n");
+}
+
+function formatOneTimeDigestContextLinks(nodes: ObsidianContextGraphSearchResult[]): string[] {
+  return nodes
+    .filter((node) => node.summary && node.type !== "agent_context")
+    .slice(0, 4)
+    .map((node) => `${node.label}: ${truncateSentence(node.summary, 220)}`);
+}
+
+function truncateSentence(value: string, maxChars: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trim()}...`;
 }
 
 function formatOneTimeDigestGlance(input: {

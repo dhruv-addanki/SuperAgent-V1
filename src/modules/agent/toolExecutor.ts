@@ -18,6 +18,7 @@ import { GoogleTokenService } from "../google/tokenService";
 import { NotionService } from "../notion/notionService";
 import { NotionTokenService } from "../notion/tokenService";
 import type { NotionPageSummary } from "../notion/notionTypes";
+import { ObsidianContextGraphService } from "../contextGraph/obsidianContextGraphService";
 import {
   AutomationService,
   formatAutomationCreated,
@@ -298,6 +299,7 @@ function normalizeAutomationCreateInput(
 export class ToolExecutor {
   private readonly audit: AuditService;
   private readonly automationService: AutomationService;
+  private readonly contextGraphService: ObsidianContextGraphService;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -307,6 +309,7 @@ export class ToolExecutor {
   ) {
     this.audit = new AuditService(prisma);
     this.automationService = new AutomationService(prisma);
+    this.contextGraphService = new ObsidianContextGraphService(prisma);
   }
 
   private async rememberRecentDocument(
@@ -1455,6 +1458,16 @@ export class ToolExecutor {
       if (toolName === "web_search") {
         const service = new WebSearchService();
         const data = await service.search(input.query, input.allowedDomains);
+        return { ok: true, data };
+      }
+
+      if (toolName === "context_graph_search") {
+        const data = await this.contextGraphService.search(context.user.id, input.query, {
+          limit: input.limit,
+          types: input.types,
+          includeAgentContext: true,
+          fallbackHighSignal: false
+        });
         return { ok: true, data };
       }
 
