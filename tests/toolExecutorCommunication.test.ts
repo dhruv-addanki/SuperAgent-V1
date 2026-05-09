@@ -310,6 +310,90 @@ describe("tool executor communication context", () => {
     ]);
   });
 
+  it("filters event-level digest rules but allows explicit all-calendar override", async () => {
+    listEventsMock.mockResolvedValue([
+      {
+        id: "event_final",
+        title: "PHYS 3340 FINAL EXAM",
+        calendarId: "primary",
+        calendarSummary: "Primary",
+        start: "2026-05-08T18:00:00.000Z"
+      },
+      {
+        id: "event_food",
+        title: "Go visit Maple Ridge for food",
+        calendarId: "primary",
+        calendarSummary: "Primary",
+        start: "2026-05-08T17:00:00.000Z"
+      }
+    ]);
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      memoryEntry: {
+        findUnique: vi.fn(async ({ where }: any) =>
+          where.userId_key.key === "digest_filter_rules"
+            ? {
+                value: {
+                  rules: [
+                    {
+                      domain: "calendar",
+                      behavior: "exclude_from_digest",
+                      scope: "scheduled_digest",
+                      match: { eventTitle: "PHYS 3340 final exam" }
+                    }
+                  ]
+                }
+              }
+            : null
+        ),
+        upsert: vi.fn(async () => undefined)
+      }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn(async () => ({})) } as any,
+      { getAccessTokenForUser: vi.fn(async () => "asana-token") } as any
+    );
+
+    const digestResult = await executor.executeToolCall(
+      "calendar_list_events",
+      {
+        timeMin: "2026-05-08T00:00:00.000Z",
+        timeMax: "2026-05-09T00:00:00.000Z"
+      },
+      {
+        user: { id: "user_1", timezone: "America/New_York" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "run my daily digest"
+      }
+    );
+
+    expect(digestResult.data).toEqual([
+      expect.objectContaining({
+        id: "event_food"
+      })
+    ]);
+
+    const explicitResult = await executor.executeToolCall(
+      "calendar_list_events",
+      {
+        timeMin: "2026-05-08T00:00:00.000Z",
+        timeMax: "2026-05-09T00:00:00.000Z"
+      },
+      {
+        user: { id: "user_1", timezone: "America/New_York" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "show all calendars today"
+      }
+    );
+
+    expect(explicitResult.data).toEqual([
+      expect.objectContaining({ id: "event_final" }),
+      expect.objectContaining({ id: "event_food" })
+    ]);
+  });
+
   it("stores recent Drive file context from search and metadata reads", async () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },

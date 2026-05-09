@@ -96,6 +96,18 @@ export function buildConversationContext(input: {
       continue;
     }
 
+    if (entry.key === "digest_filter_rules") {
+      const summary = digestFilterSummary(entry.value);
+      if (summary) userPreferences.push(`Digest filters: ${summary}`);
+      continue;
+    }
+
+    if (entry.key === "asana_priority_profile") {
+      const summary = asanaPrioritySummary(entry.value);
+      if (summary) userPreferences.push(`Asana priority profile: ${summary}`);
+      continue;
+    }
+
     if (entry.key === "preferred_email_tone") {
       const tone =
         entry.value &&
@@ -157,6 +169,58 @@ function calendarExclusionSummary(value: unknown): string | null {
     (item): item is string => typeof item === "string" && Boolean(item.trim())
   );
   return names.length ? names.join(", ") : null;
+}
+
+function digestFilterSummary(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const rules = Array.isArray((value as { rules?: unknown }).rules)
+    ? (value as { rules: unknown[] }).rules
+    : [];
+  const summaries = rules
+    .slice(0, 5)
+    .map((rule) => {
+      if (!rule || typeof rule !== "object") return null;
+      const item = rule as {
+        domain?: unknown;
+        behavior?: unknown;
+        scope?: unknown;
+        match?: Record<string, unknown>;
+      };
+      const target = Object.values(item.match ?? {}).find(
+        (matchValue): matchValue is string => typeof matchValue === "string" && Boolean(matchValue)
+      );
+      if (
+        typeof item.domain !== "string" ||
+        typeof item.behavior !== "string" ||
+        typeof item.scope !== "string" ||
+        !target
+      ) {
+        return null;
+      }
+      return `${item.behavior} ${item.domain} "${target}" for ${item.scope}`;
+    })
+    .filter((summary): summary is string => Boolean(summary));
+  if (!summaries.length) return null;
+  const suffix = rules.length > summaries.length ? `; ${rules.length - summaries.length} more` : "";
+  return `${summaries.join("; ")}${suffix}`;
+}
+
+function asanaPrioritySummary(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const profile = value as {
+    categoryWeights?: Record<string, unknown>;
+    projectWeights?: Record<string, unknown>;
+  };
+  const categoryEntries = Object.entries(profile.categoryWeights ?? {})
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .slice(0, 5)
+    .map(([name, weight]) => `${name} ${weight > 0 ? "+" : ""}${weight}`);
+  const projectEntries = Object.entries(profile.projectWeights ?? {})
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .slice(0, 3)
+    .map(([name, weight]) => `${name} ${weight > 0 ? "+" : ""}${weight}`);
+  const parts = [...categoryEntries, ...projectEntries];
+  return parts.length ? parts.join(", ") : null;
 }
 
 export function formatConversationContextForPrompt(context: ConversationContext): string {

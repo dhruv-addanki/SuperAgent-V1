@@ -24,6 +24,7 @@ import {
   formatAutomationList,
   summarizeAutomation
 } from "../automation/automationService";
+import { digestFilterRulesFromMemory, type DigestFilterRule } from "../automation/dailyBriefing";
 import { WebSearchService } from "./webSearchService";
 import {
   createPendingAction,
@@ -344,7 +345,10 @@ export class ToolExecutor {
       subject: thread.subject,
       from: thread.from,
       date: thread.date,
-      snippet: thread.snippet
+      snippet: thread.snippet,
+      labelIds: thread.labelIds,
+      unread: thread.unread,
+      messageCount: thread.messageCount
     }));
 
     await this.prisma.memoryEntry.upsert({
@@ -454,11 +458,36 @@ export class ToolExecutor {
 
   private async applyCalendarExclusions(
     userId: string,
-    events: CalendarEventSummary[]
+    events: CalendarEventSummary[],
+    latestUserMessage: string
   ): Promise<CalendarEventSummary[]> {
+    if (calendarExclusionBypassRequested(latestUserMessage)) return events;
     const excludedNames = await this.getExcludedCalendarNames(userId);
-    if (!excludedNames.length) return events;
-    return events.filter((event) => !calendarEventMatchesExclusion(event, excludedNames));
+    const digestRules = await this.getDigestFilterRules(userId);
+    if (!excludedNames.length && !digestRules.length) return events;
+    return events.filter(
+      (event) =>
+        !calendarEventMatchesExclusion(event, excludedNames) &&
+        !calendarEventMatchesDigestRule(event, digestRules, latestUserMessage)
+    );
+  }
+
+  private async getDigestFilterRules(userId: string): Promise<DigestFilterRule[]> {
+    const memoryEntry = await (this.prisma as any).memoryEntry?.findUnique?.({
+      where: { userId_key: { userId, key: "digest_filter_rules" } }
+    });
+    return digestFilterRulesFromMemory(
+      memoryEntry
+        ? [
+            {
+              key: "digest_filter_rules",
+              value: memoryEntry.value,
+              confidence: memoryEntry.confidence,
+              updatedAt: memoryEntry.updatedAt instanceof Date ? memoryEntry.updatedAt : new Date()
+            }
+          ]
+        : []
+    );
   }
 
   private async rememberRecentDriveFiles(userId: string, files: DriveFileSummary[]): Promise<void> {
@@ -2036,7 +2065,7 @@ export class ToolExecutor {
         const rawData = await service.listEvents(input);
         const data = input.calendarId
           ? rawData
-          : await this.applyCalendarExclusions(context.user.id, rawData);
+          : await this.applyCalendarExclusions(context.user.id, rawData, context.latestUserMessage);
         await this.rememberRecentCalendarEvents(context.user.id, data);
         return { ok: true, data };
       }
@@ -2518,6 +2547,55 @@ function calendarEventMatchesExclusion(
       );
     });
   });
+}
+
+function calendarEventMatchesDigestRule(
+  event: CalendarEventSummary,
+  rules: DigestFilterRule[],
+  latestUserMessage: string
+): boolean {
+  const scope = /\b(digest|automation|summary|brief|morning)\b/i.test(latestUserMessage)
+    ? "scheduled_digest"
+    : "generic_summary";
+  const candidates = [event.calendarSummary, event.calendarId, event.title]
+    .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .map(normalizeCalendarExclusionText)
+    .filter(Boolean);
+  if (!candidates.length) return false;
+
+  return rules.some((rule) => {
+    if (rule.domain !== "calendar" && rule.domain !== "all") return false;
+    if (rule.behavior !== "exclude_from_digest" && rule.behavior !== "include_only_on_direct_ask") {
+      return false;
+    }
+    if (!calendarDigestRuleScopeMatches(rule.scope, scope)) return false;
+    const matchers = [rule.match.text, rule.match.calendarName, rule.match.eventTitle]
+      .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+      .map(normalizeCalendarExclusionText);
+    return matchers.some((matcher) =>
+      candidates.some((candidate) => {
+        const matcherCompact = compactCalendarExclusionText(matcher);
+        const candidateCompact = compactCalendarExclusionText(candidate);
+        return candidate.includes(matcher) || candidateCompact.includes(matcherCompact);
+      })
+    );
+  });
+}
+
+function calendarDigestRuleScopeMatches(ruleScope: string, currentScope: string): boolean {
+  if (ruleScope === "all_reads") return true;
+  if (currentScope === "scheduled_digest") {
+    return ruleScope === "scheduled_digest" || ruleScope === "generic_summary";
+  }
+  return ruleScope === currentScope;
+}
+
+function calendarExclusionBypassRequested(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  return (
+    /\b(?:all|every)\s+(?:my\s+)?calendars?\b/.test(normalized) ||
+    /\bshow everything\b/.test(normalized)
+  );
 }
 
 function normalizeCalendarExclusionText(value: string): string {

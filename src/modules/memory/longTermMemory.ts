@@ -1,9 +1,12 @@
 import type { PrismaClient, User } from "@prisma/client";
 import type { PromptMemoryEntry } from "../agent/conversationContext";
+import type { AsanaPriorityProfile, DigestFilterRule } from "../automation/dailyBriefing";
 
 interface MemoryExtractionResult {
   timezone?: string;
   responsePreferences?: AssistantResponsePreferences;
+  digestRulesUpdated?: boolean;
+  asanaPriorityUpdated?: boolean;
 }
 
 export interface AssistantResponsePreferences {
@@ -90,6 +93,18 @@ export class LongTermMemory {
     const excludedCalendarNames = extractExcludedCalendarNames(text);
     if (excludedCalendarNames.length) {
       await this.rememberExcludedCalendarNames(user.id, excludedCalendarNames);
+    }
+
+    const digestFilterRules = extractDigestFilterRules(text);
+    if (digestFilterRules.length) {
+      await this.rememberDigestFilterRules(user.id, digestFilterRules);
+      result.digestRulesUpdated = true;
+    }
+
+    const asanaPriorityProfile = extractAsanaPriorityProfileUpdate(text);
+    if (asanaPriorityProfile) {
+      await this.rememberAsanaPriorityProfile(user.id, asanaPriorityProfile);
+      result.asanaPriorityUpdated = true;
     }
 
     const toneMatch = text.match(
@@ -234,6 +249,77 @@ export class LongTermMemory {
         key: "calendar_exclusion_preferences",
         value: { excludedCalendarNames: merged },
         confidence: 0.9
+      }
+    });
+  }
+
+  private async rememberDigestFilterRules(
+    userId: string,
+    rules: DigestFilterRule[]
+  ): Promise<void> {
+    const existing = await this.prisma.memoryEntry.findUnique({
+      where: { userId_key: { userId, key: "digest_filter_rules" } }
+    });
+    const existingRules =
+      existing?.value &&
+      typeof existing.value === "object" &&
+      Array.isArray((existing.value as { rules?: unknown }).rules)
+        ? (existing.value as { rules: unknown[] }).rules.filter(isDigestFilterRule)
+        : [];
+    const merged = dedupeDigestFilterRules([...existingRules, ...rules]);
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "digest_filter_rules" } },
+      update: {
+        value: { rules: merged } as any,
+        confidence: 0.9
+      },
+      create: {
+        userId,
+        key: "digest_filter_rules",
+        value: { rules: merged } as any,
+        confidence: 0.9
+      }
+    });
+  }
+
+  private async rememberAsanaPriorityProfile(
+    userId: string,
+    update: AsanaPriorityProfile
+  ): Promise<void> {
+    const existing = await this.prisma.memoryEntry.findUnique({
+      where: { userId_key: { userId, key: "asana_priority_profile" } }
+    });
+    const current =
+      existing?.value && typeof existing.value === "object"
+        ? (existing.value as AsanaPriorityProfile)
+        : {};
+    const merged: AsanaPriorityProfile = {
+      categoryWeights: {
+        ...(current.categoryWeights ?? {}),
+        ...(update.categoryWeights ?? {})
+      },
+      projectWeights: {
+        ...(current.projectWeights ?? {}),
+        ...(update.projectWeights ?? {})
+      },
+      taskPatternWeights: [
+        ...(current.taskPatternWeights ?? []),
+        ...(update.taskPatternWeights ?? [])
+      ].slice(-50)
+    };
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "asana_priority_profile" } },
+      update: {
+        value: merged as any,
+        confidence: 0.85
+      },
+      create: {
+        userId,
+        key: "asana_priority_profile",
+        value: merged as any,
+        confidence: 0.85
       }
     });
   }
@@ -389,6 +475,274 @@ function extractExcludedCalendarNames(text: string): string[] {
   }
 
   return Array.from(names);
+}
+
+function extractDigestFilterRules(text: string): DigestFilterRule[] {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  const rules: DigestFilterRule[] = [];
+  const hasDigestScope =
+    /\b(digest|digests|summary|summaries|brief|briefing|morning|automation)\b/.test(normalized);
+  const exclusionSignal =
+    /\b(don't|dont|do not|never|exclude|ignore|skip|leave out|hide|stop showing|don't mention|dont mention)\b/.test(
+      normalized
+    );
+  const readSignal = /\b(i already read|already read|i read|read that|handled that)\b/.test(
+    normalized
+  );
+  const lowPrioritySignal = /\b(low priority|not important|less important|downrank)\b/.test(
+    normalized
+  );
+
+  if (exclusionSignal && hasDigestScope) {
+    const targets = extractDigestRuleTargets(text);
+    const domains = inferDigestDomains(normalized);
+    for (const target of targets) {
+      for (const domain of domains) {
+        rules.push(
+          buildDigestRule(domain, "exclude_from_digest", target, "Explicit digest exclusion")
+        );
+      }
+    }
+  }
+
+  if (
+    /\b(ignore|skip|omit|don't include|dont include)\b.*\b(newsletters?|promos?|promotions)\b/.test(
+      normalized
+    )
+  ) {
+    rules.push({
+      domain: "gmail",
+      behavior: "downrank",
+      scope: "scheduled_digest",
+      match: { emailCategory: "newsletter", text: "newsletter" },
+      reason: "User downranked newsletters/promotions",
+      source: "explicit",
+      createdAt: new Date().toISOString()
+    });
+    rules.push({
+      domain: "gmail",
+      behavior: "downrank",
+      scope: "scheduled_digest",
+      match: { emailCategory: "promotions", text: "promotions" },
+      reason: "User downranked newsletters/promotions",
+      source: "explicit",
+      createdAt: new Date().toISOString()
+    });
+  }
+
+  if (readSignal) {
+    const targets = extractDigestRuleTargets(text);
+    for (const target of targets) {
+      rules.push(
+        buildDigestRule(
+          "gmail",
+          "downrank",
+          target,
+          "User said this email was already read/handled"
+        )
+      );
+    }
+  }
+
+  if (lowPrioritySignal) {
+    const targets = extractDigestRuleTargets(text);
+    for (const target of targets) {
+      rules.push(buildDigestRule("all", "downrank", target, "User marked this low priority"));
+    }
+  }
+
+  return dedupeDigestFilterRules(rules);
+}
+
+function extractAsanaPriorityProfileUpdate(text: string): AsanaPriorityProfile | null {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  if (!/\b(asana|task|tasks|project|priority|important)\b/.test(normalized)) return null;
+
+  const profile: AsanaPriorityProfile = {
+    categoryWeights: {},
+    projectWeights: {},
+    taskPatternWeights: []
+  };
+  const high = /\b(high priority|important|prioritize|highest priority|matters?|critical)\b/.test(
+    normalized
+  );
+  const low = /\b(low priority|not important|less important|deprioritize|downrank)\b/.test(
+    normalized
+  );
+  if (!high && !low) return null;
+  const weight = high ? 28 : -24;
+
+  const knownCategories = [
+    "school",
+    "job",
+    "career",
+    "admin",
+    "scanis",
+    "content",
+    "habit",
+    "test"
+  ];
+  for (const category of knownCategories) {
+    if (new RegExp(`\\b${category}\\b`).test(normalized)) {
+      profile.categoryWeights![category] = weight;
+    }
+  }
+
+  const projectMatch = text.match(
+    /\b(?:project|asana project)\s+["']?([A-Za-z0-9][A-Za-z0-9 _&.'-]{1,80})["']?\s+(?:is|as|should be|matters|counts)/i
+  );
+  if (projectMatch?.[1]) {
+    profile.projectWeights![normalizePriorityKey(projectMatch[1])] = weight;
+  }
+
+  const namedMatch = text.match(
+    /\b(?:treat|mark|remember)\s+["']?([A-Za-z0-9][A-Za-z0-9 _&.'-]{1,80})["']?\s+(?:as|is)\s+(?:a\s+)?(?:high|low|important|not important)/i
+  );
+  if (namedMatch?.[1]) {
+    profile.taskPatternWeights!.push({
+      pattern: namedMatch[1].trim(),
+      weight,
+      reason: high ? "user-marked-important" : "user-marked-low-priority"
+    });
+  }
+
+  const hasAny =
+    Object.keys(profile.categoryWeights ?? {}).length ||
+    Object.keys(profile.projectWeights ?? {}).length ||
+    (profile.taskPatternWeights ?? []).length;
+  return hasAny ? profile : null;
+}
+
+function buildDigestRule(
+  domain: DigestFilterRule["domain"],
+  behavior: DigestFilterRule["behavior"],
+  target: string,
+  reason: string
+): DigestFilterRule {
+  const normalizedTarget = target.trim();
+  const base = {
+    id: `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    domain,
+    behavior,
+    scope: "scheduled_digest" as const,
+    reason,
+    source: "explicit",
+    createdAt: new Date().toISOString()
+  };
+
+  if (domain === "calendar") {
+    return {
+      ...base,
+      match: {
+        text: normalizedTarget,
+        calendarName: normalizedTarget,
+        eventTitle: normalizedTarget
+      }
+    };
+  }
+  if (domain === "gmail") {
+    return {
+      ...base,
+      match: { text: normalizedTarget, emailSubject: normalizedTarget, emailFrom: normalizedTarget }
+    };
+  }
+  if (domain === "asana") {
+    return {
+      ...base,
+      match: {
+        text: normalizedTarget,
+        asanaProject: normalizedTarget,
+        asanaTag: normalizedTarget,
+        taskNamePattern: normalizedTarget
+      }
+    };
+  }
+  return {
+    ...base,
+    match: { text: normalizedTarget }
+  };
+}
+
+function inferDigestDomains(normalized: string): DigestFilterRule["domain"][] {
+  const domains = new Set<DigestFilterRule["domain"]>();
+  if (/\b(calendar|cal|event|events|schedule|agenda|class|exam|final|phys|cs)\b/.test(normalized)) {
+    domains.add("calendar");
+  }
+  if (/\b(email|gmail|inbox|newsletter|promo|from)\b/.test(normalized)) {
+    domains.add("gmail");
+  }
+  if (/\b(asana|task|tasks|project)\b/.test(normalized)) {
+    domains.add("asana");
+  }
+  if (!domains.size) domains.add("all");
+  return Array.from(domains);
+}
+
+function extractDigestRuleTargets(text: string): string[] {
+  const targets = new Set<string>();
+  const quoted = text.match(/["'“”‘’]([^"'“”‘’]{2,120})["'“”‘’]/g) ?? [];
+  for (const value of quoted) {
+    const cleaned = normalizeRuleTarget(value.replace(/^["'“”‘’]+|["'“”‘’]+$/g, ""));
+    if (cleaned) targets.add(cleaned);
+  }
+
+  const patterns = [
+    /\b(?:exclude|ignore|skip|hide|leave out|don't include|dont include|do not include|never include|don't mention|dont mention)\s+(?:the\s+)?([^.!?\n]{2,140}?)(?:\s+(?:from|in|for)\s+(?:my\s+)?(?:daily\s+)?(?:digest|digests|summary|summaries|briefing)|[.!?\n]|$)/gi,
+    /\b(?:i already read|already read|i read|handled)\s+(?:the\s+)?([^.!?\n]{2,140})(?:[.!?\n]|$)/gi,
+    /\b([^.!?\n]{2,100}?)\s+(?:is|are)\s+(?:low priority|not important|less important)\b/gi
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const cleaned = normalizeRuleTarget(match[1] ?? "");
+      if (cleaned) targets.add(cleaned);
+    }
+  }
+
+  if (!targets.size && /\b(newsletters?|promos?|promotions)\b/i.test(text)) {
+    targets.add("newsletters");
+    targets.add("promotions");
+  }
+
+  return Array.from(targets).slice(0, 8);
+}
+
+function normalizeRuleTarget(value: string): string | null {
+  const cleaned = value
+    .replace(
+      /\b(?:from|in|for)\s+(?:my\s+)?(?:daily\s+)?(?:digest|digests|summary|summaries|briefing).*$/i,
+      ""
+    )
+    .replace(/\b(?:calendar|events?|emails?|gmail|asana|tasks?)$/i, "")
+    .replace(/[.,!?;:]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned.length < 2 || cleaned.length > 140) return null;
+  return cleaned;
+}
+
+function isDigestFilterRule(value: unknown): value is DigestFilterRule {
+  if (!value || typeof value !== "object") return false;
+  const rule = value as Partial<DigestFilterRule>;
+  return Boolean(rule.domain && rule.behavior && rule.scope && rule.match);
+}
+
+function dedupeDigestFilterRules(rules: DigestFilterRule[]): DigestFilterRule[] {
+  const map = new Map<string, DigestFilterRule>();
+  for (const rule of rules) {
+    const key = JSON.stringify({
+      domain: rule.domain,
+      behavior: rule.behavior,
+      scope: rule.scope,
+      match: rule.match
+    }).toLowerCase();
+    map.set(key, rule);
+  }
+  return Array.from(map.values()).slice(-100);
+}
+
+function normalizePriorityKey(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function normalizeCalendarNameForStorage(value: string): string {

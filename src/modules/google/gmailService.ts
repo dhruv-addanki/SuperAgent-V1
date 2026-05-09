@@ -83,14 +83,30 @@ export class GmailService {
             format: "metadata",
             metadataHeaders: ["Subject", "From", "Date"]
           });
-          const message = details.data.messages?.[0];
+          const messages = details.data.messages ?? [];
+          const message = messages[0];
           const headers = message?.payload?.headers ?? [];
+          const labelIds = Array.from(
+            new Set(
+              messages.flatMap((item: any) =>
+                Array.isArray(item.labelIds)
+                  ? item.labelIds.filter(
+                      (label: unknown): label is string => typeof label === "string"
+                    )
+                  : []
+              )
+            )
+          );
           return {
             threadId: details.data.id ?? thread.id ?? "",
+            messageId: message?.id ?? undefined,
             snippet: details.data.snippet ?? message?.snippet ?? undefined,
             subject: getHeader(headers, "Subject"),
             from: getHeader(headers, "From"),
-            date: getHeader(headers, "Date")
+            date: getHeader(headers, "Date"),
+            labelIds,
+            unread: labelIds.includes("UNREAD"),
+            messageCount: messages.length
           };
         })
       );

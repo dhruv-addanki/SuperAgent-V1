@@ -19,6 +19,14 @@ import { AsanaTokenService } from "../asana/tokenService";
 import { GoogleTokenService } from "../google/tokenService";
 import { NotionTokenService } from "../notion/tokenService";
 import { LongTermMemory, type AssistantResponsePreferences } from "../memory/longTermMemory";
+import {
+  buildDailyBriefingSnapshot,
+  digestFilterRulesFromMemory,
+  formatDigestRulesForUser,
+  formatLastDigestDebugForUser,
+  lastDailyBriefingDebugMemoryValue,
+  type DailyBriefingSnapshot
+} from "../automation/dailyBriefing";
 import { ShortTermMemory } from "../memory/shortTermMemory";
 import {
   buildPendingActionContext,
@@ -330,6 +338,32 @@ export class AgentOrchestrator {
 
         return result.assistantMessage;
       };
+
+      if (shouldShowDigestRules(preparedInput.text)) {
+        await replyToUser(formatDigestRulesForUser(digestFilterRulesFromMemory(memoryEntries)), {
+          allowSetupHint: false
+        });
+        return;
+      }
+
+      if (shouldExplainDigestInclusion(preparedInput.text)) {
+        await replyToUser(formatLastDigestDebugForUser(memoryEntries, preparedInput.text), {
+          allowSetupHint: false
+        });
+        return;
+      }
+
+      if (
+        isDigestPreferenceOnlyMessage(preparedInput.text, {
+          digestRulesUpdated: memoryExtraction.digestRulesUpdated,
+          asanaPriorityUpdated: memoryExtraction.asanaPriorityUpdated
+        })
+      ) {
+        await replyToUser(formatDigestPreferenceAcknowledgement(memoryExtraction), {
+          allowSetupHint: false
+        });
+        return;
+      }
 
       if (integrationLinkRequest) {
         await replyToUser(formatIntegrationLinkForWhatsApp(integrationLinkRequest), {
@@ -1635,11 +1669,34 @@ export class AgentOrchestrator {
       )
     ]);
 
+    const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(input.user.id);
+    const briefingSnapshot = buildDailyBriefingSnapshot({
+      gmailResult,
+      calendarResult,
+      asanaResult,
+      memoryEntries,
+      timezone: input.user.timezone
+    });
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId: input.user.id, key: "last_daily_briefing_debug" } },
+      update: {
+        value: lastDailyBriefingDebugMemoryValue(briefingSnapshot) as any,
+        confidence: 1
+      },
+      create: {
+        userId: input.user.id,
+        key: "last_daily_briefing_debug",
+        value: lastDailyBriefingDebugMemoryValue(briefingSnapshot) as any,
+        confidence: 1
+      }
+    });
+
     return formatOneTimeMorningDigest({
       gmailResult,
       calendarResult,
       asanaResult,
-      timezone: input.user.timezone
+      timezone: input.user.timezone,
+      briefingSnapshot
     });
   }
 
@@ -1971,6 +2028,7 @@ function formatOneTimeMorningDigest(input: {
   calendarResult: ToolExecutionResult;
   asanaResult: ToolExecutionResult;
   timezone: string;
+  briefingSnapshot?: DailyBriefingSnapshot;
 }): string {
   const sections = [
     "Morning email, calendar, and Asana digest",
@@ -1978,18 +2036,35 @@ function formatOneTimeMorningDigest(input: {
   ];
 
   if (input.gmailResult.ok) {
-    sections.push(["Gmail:", formatGmailRetrySnapshot(input.gmailResult.data)].join("\n"));
+    sections.push(
+      [
+        "Gmail:",
+        input.briefingSnapshot
+          ? formatBriefingFactSnapshot(
+              input.briefingSnapshot,
+              "gmail",
+              "No important recent inbox threads selected."
+            )
+          : formatGmailRetrySnapshot(input.gmailResult.data)
+      ].join("\n")
+    );
   }
 
   if (input.calendarResult.ok) {
     sections.push(
       [
         "Schedule:",
-        formatCalendarOverview(
-          (input.calendarResult.data as CalendarEventSummary[] | undefined) ?? [],
-          input.timezone,
-          "today"
-        )
+        input.briefingSnapshot
+          ? formatBriefingFactSnapshot(
+              input.briefingSnapshot,
+              "calendar",
+              "No key calendar events selected for today."
+            )
+          : formatCalendarOverview(
+              (input.calendarResult.data as CalendarEventSummary[] | undefined) ?? [],
+              input.timezone,
+              "today"
+            )
       ].join("\n")
     );
   }
@@ -1998,14 +2073,20 @@ function formatOneTimeMorningDigest(input: {
     sections.push(
       [
         "Asana:",
-        formatScopedAsanaTaskList(
-          (input.asanaResult.data as AsanaTaskSummary[] | undefined) ?? [],
-          {
-            label: "from My Tasks",
-            emptyLabel: "I don't see any open Asana tasks in My Tasks.",
-            emphasizeImportance: true
-          }
-        )
+        input.briefingSnapshot
+          ? formatBriefingFactSnapshot(
+              input.briefingSnapshot,
+              "asana",
+              "No Asana priorities selected."
+            )
+          : formatScopedAsanaTaskList(
+              (input.asanaResult.data as AsanaTaskSummary[] | undefined) ?? [],
+              {
+                label: "from My Tasks",
+                emptyLabel: "I don't see any open Asana tasks in My Tasks.",
+                emphasizeImportance: true
+              }
+            )
       ].join("\n")
     );
   }
@@ -2156,6 +2237,29 @@ function formatGmailRetrySnapshot(data: unknown): string {
   return `Found ${threads.length} recent inbox ${threads.length === 1 ? "thread" : "threads"}.\n${lines.join("\n")}`;
 }
 
+function formatBriefingFactSnapshot(
+  snapshot: DailyBriefingSnapshot,
+  source: "gmail" | "calendar" | "asana",
+  emptyLabel: string
+): string {
+  const facts = snapshot.selectedFacts.filter((fact) => fact.source === source).slice(0, 10);
+  if (!facts.length) return emptyLabel;
+  return facts
+    .map((fact, index) => {
+      const details = [
+        fact.sourceName,
+        fact.projectName,
+        fact.dueOn ? `due ${fact.dueOn}` : undefined,
+        typeof fact.provenance.startLabel === "string" ? fact.provenance.startLabel : undefined,
+        fact.unread ? "unread" : undefined
+      ]
+        .filter(Boolean)
+        .join(" • ");
+      return `${index + 1}. ${fact.title}${details ? ` (${details})` : ""}`;
+    })
+    .join("\n");
+}
+
 function lastAssistantMessage(history: ResponseInputItem[]): string | null {
   for (let index = history.length - 1; index >= 0; index -= 1) {
     const item = history[index];
@@ -2197,6 +2301,49 @@ function isResponsePreferenceOnlyMessage(
   return !/\b(calendar|email|gmail|asana|notion|drive|doc|docs|task|tasks|event|reminder|send|book|create|add|delete|trash|move|update|search|find|read|summarize|list|look up|why|what|when)\b/.test(
     normalized
   );
+}
+
+function shouldShowDigestRules(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  return /\b(show|list|what are|what're)\b.*\b(digest|briefing)\b.*\b(rules|filters|preferences)\b/.test(
+    normalized
+  );
+}
+
+function shouldExplainDigestInclusion(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  return /\bwhy\b.*\b(include|mention|show|surface|rank|prioritize)\b/.test(normalized);
+}
+
+function isDigestPreferenceOnlyMessage(
+  text: string,
+  result: { digestRulesUpdated?: boolean; asanaPriorityUpdated?: boolean }
+): boolean {
+  if (!result.digestRulesUpdated && !result.asanaPriorityUpdated) return false;
+  const normalized = text.toLowerCase().replace(/[’]/g, "'");
+  if (
+    /\b(show|list|check|read|summarize|create|add|move|update|delete|complete|mark|send|draft|book|run|trigger)\b/.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+  return /\b(digest|briefing|summary|priority|important|ignore|exclude|skip|already read|low priority|high priority)\b/.test(
+    normalized
+  );
+}
+
+function formatDigestPreferenceAcknowledgement(result: {
+  digestRulesUpdated?: boolean;
+  asanaPriorityUpdated?: boolean;
+}): string {
+  const parts = [
+    result.digestRulesUpdated ? "digest filters" : null,
+    result.asanaPriorityUpdated ? "Asana priority preferences" : null
+  ].filter((part): part is string => Boolean(part));
+  return parts.length
+    ? `Got it. I updated ${parts.join(" and ")} for future digests.`
+    : "Got it. I updated your digest preferences.";
 }
 
 function formatResponsePreferenceAcknowledgement(

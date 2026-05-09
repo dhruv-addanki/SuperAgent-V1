@@ -9,6 +9,7 @@
     "start": "node dist/src/app/server.js",
     "admin:whatsapp": "tsx src/scripts/adminWhatsapp.ts",
     "debug:asana-create": "tsx src/scripts/debugAsanaCreate.ts",
+    "debug:digest": "tsx src/scripts/debugDigest.ts",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",

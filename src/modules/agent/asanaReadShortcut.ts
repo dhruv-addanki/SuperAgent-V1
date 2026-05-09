@@ -345,6 +345,24 @@ export function resolveConcreteAsanaCompletionTarget(
   if (!asksToCompleteAsanaTask(normalized)) return null;
 
   const recentList = options.referenceList ?? lastVisibleAsanaTaskList(memoryEntries);
+  if (options.referenceList && referencesClusterCompletionTarget(normalized)) {
+    const tasks = options.referenceList.tasks.filter((task) => task.taskGid);
+    if (!tasks.length) {
+      return {
+        status: "empty",
+        message: "The referenced Asana cluster has no tasks to complete."
+      };
+    }
+    if (tasks.length > 25) {
+      return {
+        status: "too_many",
+        message:
+          "That Asana cluster is too large for an automatic bulk completion. Narrow it to 25 tasks or fewer."
+      };
+    }
+    return { status: "resolved", tasks };
+  }
+
   if (isBroadAsanaCompletionRequest(normalized)) {
     if (!recentList && hasLegacyRecentAsanaTasks(memoryEntries)) return null;
     return {
@@ -375,17 +393,6 @@ export function resolveConcreteAsanaCompletionTarget(
       status: "empty",
       message: "The last Asana task list I showed had no tasks to complete."
     };
-  }
-
-  if (options.referenceList && referencesClusterCompletionTarget(normalized)) {
-    if (tasks.length > 25) {
-      return {
-        status: "too_many",
-        message:
-          "That Asana cluster is too large for an automatic bulk completion. Narrow it to 25 tasks or fewer."
-      };
-    }
-    return { status: "resolved", tasks };
   }
 
   const explicitPastedTargets = resolveExplicitPastedCompletionTargets(text, tasks);
@@ -1417,7 +1424,7 @@ function asksToCompleteAsanaTask(normalizedText: string): boolean {
     /\bset\b.*\b(?:complete|done|finished)\b/.test(normalizedText);
   if (!asksComplete) return false;
   return (
-    /\basana\b|\btasks?\b|\bit\b|\bthat\b|\bthose\b|\bthese\b|\bthem\b|\bones?\b|\bitems?\b/.test(
+    /\basana\b|\btasks?\b|\bit\b|\bthat\b|\bthose\b|\bthese\b|\bthem\b|\bones?\b|\bitems?\b|\bcluster\b/.test(
       normalizedText
     ) || /\b(?:first|second|third|fourth|fifth|\d{1,2})\b/.test(normalizedText)
   );

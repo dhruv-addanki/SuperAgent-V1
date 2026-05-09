@@ -187,6 +187,75 @@ describe("long term memory", () => {
     );
   });
 
+  it("stores durable digest filter rules", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    const result = await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "don't include PHYS 3340 final exam in my daily digest"
+    );
+
+    expect(result.digestRulesUpdated).toBe(true);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "digest_filter_rules" } },
+        update: {
+          value: {
+            rules: [
+              expect.objectContaining({
+                domain: "calendar",
+                behavior: "exclude_from_digest",
+                scope: "scheduled_digest",
+                match: expect.objectContaining({
+                  eventTitle: "PHYS 3340 final exam"
+                })
+              })
+            ]
+          },
+          confidence: 0.9
+        }
+      })
+    );
+  });
+
+  it("stores Asana priority profile feedback", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    const result = await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "remember school Asana tasks are high priority"
+    );
+
+    expect(result.asanaPriorityUpdated).toBe(true);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "asana_priority_profile" } },
+        update: {
+          value: expect.objectContaining({
+            categoryWeights: expect.objectContaining({
+              school: 28
+            })
+          }),
+          confidence: 0.85
+        }
+      })
+    );
+  });
+
   it("ignores invalid timezones", async () => {
     const upsert = vi.fn(async () => undefined);
     const update = vi.fn(async () => undefined);

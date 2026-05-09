@@ -1,9 +1,13 @@
 export interface GmailThreadSummary {
   threadId: string;
+  messageId?: string;
   snippet?: string;
   subject?: string;
   from?: string;
   date?: string;
+  labelIds?: string[];
+  unread?: boolean;
+  messageCount?: number;
 }
 
 export interface GmailThreadMessage {

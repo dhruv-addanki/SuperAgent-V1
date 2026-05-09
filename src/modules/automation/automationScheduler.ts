@@ -22,7 +22,8 @@ import { LongTermMemory } from "../memory/longTermMemory";
 import { SetupStatusService, setupStatusProfileLines } from "../agent/setupStatusService";
 import {
   buildConversationContext,
-  formatConversationContextForPrompt
+  formatConversationContextForPrompt,
+  type PromptMemoryEntry
 } from "../agent/conversationContext";
 import { getOrCreateWhatsAppConversation, persistMessage } from "../agent/conversationState";
 import { runResponseLoop } from "../agent/responseLoop";
@@ -30,15 +31,18 @@ import { buildSystemPrompt } from "../agent/systemPrompt";
 import { ToolExecutor, type ToolExecutionResult } from "../agent/toolExecutor";
 import { WhatsAppService } from "../whatsapp/whatsappService";
 import { AutomationService, type ClaimedAutomation } from "./automationService";
-import { calendarOverviewWindow, formatCalendarOverview } from "../agent/calendarReadShortcut";
-import { formatScopedAsanaTaskList } from "../agent/asanaReadShortcut";
+import {
+  buildDailyBriefingSnapshot,
+  formatDailyBriefingSnapshotForPrompt,
+  lastDailyBriefingDebugMemoryValue
+} from "./dailyBriefing";
+import { calendarOverviewWindow } from "../agent/calendarReadShortcut";
 import {
   asanaTaskRefsFromSummaries,
   buildAssistantMessageRawPayload,
   type AsanaAssistantTaskRef,
   type AssistantDeliveryMetadata
 } from "../agent/asanaMessageRefs";
-import type { CalendarEventSummary } from "../google/googleTypes";
 import type { AsanaTaskSummary } from "../asana/asanaTypes";
 
 interface AutomationSchedulerOptions {
@@ -186,9 +190,14 @@ export class AutomationScheduler {
     conversation: Conversation
   ): Promise<AutomationPromptResult> {
     const setupStatus = await this.setupStatusService.getStatus(user);
-    const preloadedData = await this.buildAutomationDataSnapshot(automation, user, conversation);
     const memoryEntries = filterAutomationContextMemoryEntries(
       await this.longTermMemory.getRecentEntriesForContext(user.id)
+    );
+    const preloadedData = await this.buildAutomationDataSnapshot(
+      automation,
+      user,
+      conversation,
+      memoryEntries
     );
     const automationInput = [
       "Run this scheduled automation now.",
@@ -242,29 +251,32 @@ export class AutomationScheduler {
   private async buildAutomationDataSnapshot(
     automation: Automation,
     user: User,
-    conversation: Conversation
+    conversation: Conversation,
+    memoryEntries: PromptMemoryEntry[]
   ): Promise<AutomationDataSnapshot> {
     const requestText = `${automation.name}\n${automation.prompt}`.toLowerCase();
     const sections: string[] = [];
     let asanaTaskRefs: AsanaAssistantTaskRef[] = [];
+    let gmailResult: ToolExecutionResult | null = null;
+    let calendarResult: ToolExecutionResult | null = null;
+    let asanaResult: ToolExecutionResult | null = null;
 
     if (/\b(email|emails|gmail|inbox|mail)\b/.test(requestText)) {
-      const result = await this.executeReadOnlyAutomationTool(
+      gmailResult = await this.executeReadOnlyAutomationTool(
         automation,
         user,
         conversation,
         "gmail_search_threads",
         {
-          query: "in:inbox newer_than:1d",
-          maxResults: 10
+          query: "in:inbox newer_than:2d",
+          maxResults: 15
         }
       );
-      sections.push(formatPreloadedAutomationResult("Gmail", result, formatGmailSnapshot));
     }
 
     if (/\b(calendar|schedule|agenda|events?)\b/.test(requestText)) {
       const window = calendarOverviewWindow("today", automation.timezone || user.timezone);
-      const result = await this.executeReadOnlyAutomationTool(
+      calendarResult = await this.executeReadOnlyAutomationTool(
         automation,
         user,
         conversation,
@@ -275,19 +287,10 @@ export class AutomationScheduler {
           maxResults: 50
         }
       );
-      sections.push(
-        formatPreloadedAutomationResult("Calendar", result, (data) =>
-          formatCalendarOverview(
-            (data as CalendarEventSummary[] | undefined) ?? [],
-            automation.timezone || user.timezone,
-            "today"
-          )
-        )
-      );
     }
 
     if (/\basana\b|\btasks?\b/.test(requestText)) {
-      const result = await this.executeReadOnlyAutomationTool(
+      asanaResult = await this.executeReadOnlyAutomationTool(
         automation,
         user,
         conversation,
@@ -299,24 +302,46 @@ export class AutomationScheduler {
           sortDirection: "asc"
         }
       );
-      sections.push(
-        formatPreloadedAutomationResult("Asana", result, (data) =>
-          formatScopedAsanaTaskList((data as AsanaTaskSummary[] | undefined) ?? [], {
-            label: "from My Tasks",
-            emptyLabel: "I don't see any open Asana tasks in My Tasks.",
-            emphasizeImportance: true
-          })
-        )
-      );
-      if (result.ok) {
+      if (asanaResult.ok) {
         asanaTaskRefs = asanaTaskRefsFromSummaries(
-          (result.data as AsanaTaskSummary[] | undefined) ?? [],
+          (asanaResult.data as AsanaTaskSummary[] | undefined) ?? [],
           "automation My Tasks"
         );
       }
     }
 
+    const briefingSnapshot = buildDailyBriefingSnapshot({
+      gmailResult,
+      calendarResult,
+      asanaResult,
+      memoryEntries,
+      timezone: automation.timezone || user.timezone
+    });
+    sections.push(formatDailyBriefingSnapshotForPrompt(briefingSnapshot));
+    await this.rememberLastDailyBriefingDebug(user.id, briefingSnapshot);
+
     return { sections, asanaTaskRefs };
+  }
+
+  private async rememberLastDailyBriefingDebug(
+    userId: string,
+    snapshot: ReturnType<typeof buildDailyBriefingSnapshot>
+  ): Promise<void> {
+    const delegate = (this.prisma as any).memoryEntry;
+    if (!delegate?.upsert) return;
+    await delegate.upsert({
+      where: { userId_key: { userId, key: "last_daily_briefing_debug" } },
+      update: {
+        value: lastDailyBriefingDebugMemoryValue(snapshot) as any,
+        confidence: 1
+      },
+      create: {
+        userId,
+        key: "last_daily_briefing_debug",
+        value: lastDailyBriefingDebugMemoryValue(snapshot) as any,
+        confidence: 1
+      }
+    });
   }
 
   private async executeReadOnlyAutomationTool(
@@ -478,6 +503,9 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
     "- Only use read-only information tools.",
     "- Do not create drafts, send emails, write calendar events, update Asana, or write Notion/Docs.",
     "- If preloaded read-only data is included, use it as the primary source and do not repeat the same read unless the data is missing or clearly insufficient.",
+    "- The preloaded Daily briefing intelligence section is already filtered and scored by backend rules. Do not resurrect suppressed facts, excluded calendars, read/low-signal emails, all-day task-like calendar items, or low-priority duplicate/test tasks.",
+    "- Use score reasons to explain importance. A stale due date alone is not importance.",
+    "- When a selected email, event, and task appear linked, combine them into one concrete next action instead of listing disconnected facts.",
     "- If structured conversation context conflicts with preloaded read-only data, trust the preloaded data for this run.",
     "- Write the digest as a compact command center for starting the day, with the practical structure of a morning briefing.",
     "- Target 12 to 18 WhatsApp-friendly lines. You may go slightly longer for real conflicts, important email, or source failures.",
@@ -504,41 +532,6 @@ export function buildScheduledAutomationInstructions(basePrompt: string): string
 
 export function filterAutomationContextMemoryEntries<T extends { key: string }>(entries: T[]): T[] {
   return entries.filter((entry) => !entry.key.startsWith("recent_"));
-}
-
-function formatPreloadedAutomationResult(
-  label: string,
-  result: ToolExecutionResult,
-  formatData: (data: unknown) => string
-): string {
-  if (!result.ok) {
-    return `${label}: unavailable. ${result.userMessage ?? result.error ?? "The read failed."}`;
-  }
-
-  return `${label}:\n${formatData(result.data)}`;
-}
-
-function formatGmailSnapshot(data: unknown): string {
-  if (!Array.isArray(data) || !data.length) {
-    return "No recent inbox threads found.";
-  }
-
-  const lines = data.slice(0, 10).map((thread, index) => {
-    const item = thread as {
-      subject?: unknown;
-      from?: unknown;
-      date?: unknown;
-      snippet?: unknown;
-    };
-    const subject =
-      typeof item.subject === "string" && item.subject ? item.subject : "(No subject)";
-    const from = typeof item.from === "string" && item.from ? ` from ${item.from}` : "";
-    const date = typeof item.date === "string" && item.date ? ` at ${item.date}` : "";
-    const snippet = typeof item.snippet === "string" && item.snippet ? `: ${item.snippet}` : "";
-    return `${index + 1}. ${subject}${from}${date}${snippet}`;
-  });
-
-  return `Found ${data.length} recent inbox threads.\n${lines.join("\n")}`;
 }
 
 function routeAutomationToolCall(
