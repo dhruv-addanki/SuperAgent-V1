@@ -137,59 +137,65 @@ export class ObsidianContextGraphService {
     await this.ensureFreshIndex(userId);
 
     const delegate = contextGraphDelegate(this.prisma);
-    if (!delegate?.findMany) return [];
+    if (!delegate?.findMany) {
+      return this.searchFilesystemGraph(query, options);
+    }
 
     const where: Record<string, unknown> = { userId };
     if (options.types?.length) {
       where.type = { in: options.types };
     }
 
-    const rows = await delegate.findMany({
-      where,
-      orderBy: [{ confidence: "desc" }, { indexedAt: "desc" }],
-      take: 250
-    });
-    const includeAgentContext = options.includeAgentContext ?? true;
-    const fallbackHighSignal = options.fallbackHighSignal ?? true;
-    const tokens = tokenize(query);
-    const scored: ObsidianContextGraphSearchResult[] = rows
-      .map((row: any): ObsidianContextGraphSearchResult => {
-        const result = rowToSearchResult(row, scoreNode(row, query, tokens));
-        if (result.type === "agent_context" && includeAgentContext) {
-          result.score += 2.5;
-        }
-        return result;
-      })
-      .filter(
-        (node: ObsidianContextGraphSearchResult) =>
-          includeAgentContext || node.type !== "agent_context"
+    let rows: any[];
+    try {
+      rows = await delegate.findMany({
+        where,
+        orderBy: [{ confidence: "desc" }, { indexedAt: "desc" }],
+        take: 250
+      });
+    } catch (error) {
+      logger.warn(
+        { error },
+        "Failed to read Obsidian context graph index; using filesystem fallback"
       );
-
-    const relevant = scored
-      .filter((node) => node.type === "agent_context" || node.score >= 1.25)
-      .sort(sortSearchResults)
-      .slice(0, options.limit ?? DEFAULT_LIMIT);
-
-    if (!fallbackHighSignal || relevant.length >= Math.min(3, options.limit ?? DEFAULT_LIMIT)) {
-      return relevant;
+      return this.searchFilesystemGraph(query, options);
     }
 
-    const existingIds = new Set(relevant.map((node) => node.pcgId));
-    const fallbacks = scored
-      .filter(
-        (node) =>
-          !existingIds.has(node.pcgId) &&
-          node.type !== "source_conversation" &&
-          node.confidence >= 0.96 &&
-          node.evidenceCount >= 2
-      )
-      .sort(
-        (left, right) =>
-          right.confidence - left.confidence || right.evidenceCount - left.evidenceCount
-      )
-      .slice(0, Math.max(0, (options.limit ?? DEFAULT_LIMIT) - relevant.length));
+    if (!rows.length) {
+      return this.searchFilesystemGraph(query, options);
+    }
 
-    return [...relevant, ...fallbacks].slice(0, options.limit ?? DEFAULT_LIMIT);
+    return rankContextGraphRows(rows, query, options);
+  }
+
+  private async searchFilesystemGraph(
+    query: string,
+    options: SearchOptions
+  ): Promise<ObsidianContextGraphSearchResult[]> {
+    const resolvedGraphPath = normalizeConfiguredPath(this.graphPath);
+    if (!resolvedGraphPath) return [];
+    const stat = await fs.stat(resolvedGraphPath).catch(() => null);
+    if (!stat?.isDirectory()) return [];
+
+    try {
+      const markdownFiles = await listMarkdownFiles(resolvedGraphPath);
+      const nodes: ParsedContextGraphNode[] = [];
+      for (const filePath of markdownFiles) {
+        if (isSourceConversationPath(resolvedGraphPath, filePath)) continue;
+        const content = await fs.readFile(filePath, "utf8");
+        const node = parseContextGraphNode({
+          graphPath: resolvedGraphPath,
+          filePath,
+          content
+        });
+        if (node) nodes.push(node);
+      }
+
+      return rankContextGraphRows(nodes, query, options);
+    } catch (error) {
+      logger.warn({ error }, "Failed to search Obsidian context graph filesystem fallback");
+      return [];
+    }
   }
 
   async getPromptContextLines(
@@ -330,6 +336,59 @@ export class ObsidianContextGraphService {
       skippedCount
     };
   }
+}
+
+function rankContextGraphRows(
+  rows: any[],
+  query: string,
+  options: SearchOptions
+): ObsidianContextGraphSearchResult[] {
+  const includeAgentContext = options.includeAgentContext ?? true;
+  const fallbackHighSignal = options.fallbackHighSignal ?? true;
+  const allowedTypes = new Set(options.types ?? []);
+  const tokens = tokenize(query);
+  const filteredRows = allowedTypes.size
+    ? rows.filter((row) => allowedTypes.has(String(row.type ?? "")))
+    : rows;
+
+  const scored: ObsidianContextGraphSearchResult[] = filteredRows
+    .map((row: any): ObsidianContextGraphSearchResult => {
+      const result = rowToSearchResult(row, scoreNode(row, query, tokens));
+      if (result.type === "agent_context" && includeAgentContext) {
+        result.score += 2.5;
+      }
+      return result;
+    })
+    .filter(
+      (node: ObsidianContextGraphSearchResult) =>
+        includeAgentContext || node.type !== "agent_context"
+    );
+
+  const relevant = scored
+    .filter((node) => node.type === "agent_context" || node.score >= 1.25)
+    .sort(sortSearchResults)
+    .slice(0, options.limit ?? DEFAULT_LIMIT);
+
+  if (!fallbackHighSignal || relevant.length >= Math.min(3, options.limit ?? DEFAULT_LIMIT)) {
+    return relevant;
+  }
+
+  const existingIds = new Set(relevant.map((node) => node.pcgId));
+  const fallbacks = scored
+    .filter(
+      (node) =>
+        !existingIds.has(node.pcgId) &&
+        node.type !== "source_conversation" &&
+        node.confidence >= 0.96 &&
+        node.evidenceCount >= 2
+    )
+    .sort(
+      (left, right) =>
+        right.confidence - left.confidence || right.evidenceCount - left.evidenceCount
+    )
+    .slice(0, Math.max(0, (options.limit ?? DEFAULT_LIMIT) - relevant.length));
+
+  return [...relevant, ...fallbacks].slice(0, options.limit ?? DEFAULT_LIMIT);
 }
 
 function contextGraphDelegate(prisma: PrismaClient): any {
