@@ -18,6 +18,7 @@ import {
   matchCalendarAllCalendarsFollowUpRequest,
   matchGenericCalendarOverviewRequest
 } from "./calendarReadShortcut";
+import { matchAsanaCalendarCreateRequest } from "./compoundWriteShortcut";
 
 export type IntentDomain =
   | "asana"
@@ -52,6 +53,8 @@ export type IntentConfidence = "high" | "medium" | "low";
 export type RequiredIntegration = "google" | "asana" | "notion";
 
 export type IntentShortcutCandidate =
+  | "asana_calendar_create"
+  | "one_time_focus_plan"
   | "one_time_morning_digest"
   | "missing_digest_retry"
   | "ambiguous_asana_bulk_complete"
@@ -276,6 +279,14 @@ function detectShortcutCandidate(
   entities: IntentEntity[],
   trace: string[]
 ): IntentShortcutCandidate | undefined {
+  if (matchAsanaCalendarCreateRequest(text, timezone)) {
+    trace.push("shortcut:asana_calendar_create");
+    return "asana_calendar_create";
+  }
+  if (matchesOneTimeFocusPlan(text)) {
+    trace.push("shortcut:one_time_focus_plan");
+    return "one_time_focus_plan";
+  }
   if (matchesOneTimeMorningDigest(text, history)) {
     trace.push("shortcut:one_time_morning_digest");
     return "one_time_morning_digest";
@@ -368,6 +379,13 @@ function applyShortcutDomainHints(
   };
 
   if (!shortcut) return hits;
+  if (shortcut === "asana_calendar_create") {
+    ensure("asana", "high", "compound_write_shortcut");
+    ensure("calendar", "high", "compound_write_shortcut");
+  }
+  if (shortcut === "one_time_focus_plan") {
+    ensure("general", "medium", "focus_plan_shortcut");
+  }
   if (shortcut === "calendar_overview") ensure("calendar", "high", "calendar_shortcut");
   if (
     shortcut === "asana_today_and_latest_open" ||
@@ -421,6 +439,8 @@ function detectAction(input: {
     input.trace.push("action:pending_reference_without_pending");
     return "unknown";
   }
+  if (input.shortcutCandidate === "asana_calendar_create") return "create";
+  if (input.shortcutCandidate === "one_time_focus_plan") return "read";
   if (input.shortcutCandidate === "one_time_morning_digest") return "run_once";
   if (input.shortcutCandidate === "missing_digest_retry") return "retry";
   if (
@@ -515,7 +535,11 @@ function computeCompound(domains: IntentDomain[], normalized: string): boolean {
 }
 
 function compoundSafeShortcut(shortcut: IntentShortcutCandidate): boolean {
-  return shortcut === "missing_digest_retry";
+  return (
+    shortcut === "missing_digest_retry" ||
+    shortcut === "asana_calendar_create" ||
+    shortcut === "one_time_focus_plan"
+  );
 }
 
 function referencesSetup(normalized: string): boolean {
@@ -656,6 +680,21 @@ function matchesOneTimeMorningDigest(text: string, history: ResponseInputItem[])
     /\bdo it manually\b/.test(normalized) ||
     /\brun it\b/.test(normalized)
   );
+}
+
+function matchesOneTimeFocusPlan(text: string): boolean {
+  const normalized = normalize(text);
+  const asksFocus =
+    /\bwhat should i focus on\b/.test(normalized) ||
+    /\bplan my day\b/.test(normalized) ||
+    /\bfocus plan\b/.test(normalized) ||
+    /\bprioriti[sz]e\b/.test(normalized);
+  if (!asksFocus || !/\btoday\b/.test(normalized)) return false;
+  const hasLiveSource = /\b(calendar|schedule|agenda|asana|tasks?|gmail|email|inbox)\b/.test(
+    normalized
+  );
+  const hasContextGraph = /\b(context graph|obsidian|personal context|graph)\b/.test(normalized);
+  return hasLiveSource && hasContextGraph;
 }
 
 function matchesMissingDigestRetry(text: string, history: ResponseInputItem[]): boolean {

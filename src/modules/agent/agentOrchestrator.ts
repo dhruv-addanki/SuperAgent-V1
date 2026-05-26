@@ -100,6 +100,10 @@ import {
   matchCalendarAllCalendarsFollowUpRequest,
   matchGenericCalendarOverviewRequest
 } from "./calendarReadShortcut";
+import {
+  matchAsanaCalendarCreateRequest,
+  type AsanaCalendarCreateShortcut
+} from "./compoundWriteShortcut";
 import type { AsanaProjectSummary, AsanaTaskSummary } from "../asana/asanaTypes";
 import type { CalendarEventSummary, GmailThreadSummary } from "../google/googleTypes";
 
@@ -314,7 +318,10 @@ export class AgentOrchestrator {
       const runModelFallback = async (promptSuffix = ""): Promise<string> => {
         const personalContextGraph = await this.loadPersonalContextGraphForPrompt(
           user.id,
-          preparedInput.text
+          preparedInput.text,
+          {
+            fallbackHighSignal: !requiresDirectContextGraphMatch(preparedInput.text)
+          }
         );
         const conversationContext = buildConversationContext({
           latestUserMessage: preparedInput.text,
@@ -388,6 +395,22 @@ export class AgentOrchestrator {
         (firstInteraction && isGreetingOnly(preparedInput.text) && !setupStatus.hasAnyConnected)
       ) {
         await replyToUser(formatSetupStatusForWhatsApp(setupStatus), { allowSetupHint: false });
+        return;
+      }
+
+      const asanaCalendarCreate = shouldUseTextShortcuts
+        ? matchAsanaCalendarCreateRequest(preparedInput.text, user.timezone)
+        : null;
+      if (asanaCalendarCreate && intentRoute.shortcutCandidate === "asana_calendar_create") {
+        await replyToUser(
+          await this.executeAsanaCalendarCreate({
+            shortcut: asanaCalendarCreate,
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }),
+          { allowSetupHint: false }
+        );
         return;
       }
 
@@ -506,6 +529,18 @@ export class AgentOrchestrator {
       ) {
         await replyToUser(
           "I need the digest or task list with that Asana cluster to apply this safely. Reply to that exact message or ask me to show the cluster first."
+        );
+        return;
+      }
+
+      if (shouldUseTextShortcuts && intentRoute.shortcutCandidate === "one_time_focus_plan") {
+        await replyToUser(
+          await this.runOneTimeFocusPlan({
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }),
+          { allowSetupHint: false }
         );
         return;
       }
@@ -1521,6 +1556,35 @@ export class AgentOrchestrator {
     return formatAsanaMultiCreateMessage(created, failed);
   }
 
+  private async executeAsanaCalendarCreate(input: {
+    shortcut: AsanaCalendarCreateShortcut;
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<string> {
+    const context = {
+      user: input.user,
+      conversation: input.conversation,
+      latestUserMessage: input.latestUserMessage
+    };
+    const [asanaResult, calendarResult] = await Promise.all([
+      this.toolExecutor.executeToolCall(
+        "asana_create_task",
+        {
+          name: input.shortcut.title,
+          ...(input.shortcut.dueOn ? { dueOn: input.shortcut.dueOn } : {})
+        },
+        context,
+        { force: true }
+      ),
+      this.toolExecutor.executeToolCall("calendar_create_event", input.shortcut.calendar, context, {
+        force: true
+      })
+    ]);
+
+    return formatAsanaCalendarCreateMessage(input.shortcut, asanaResult, calendarResult);
+  }
+
   private async executeConcreteAsanaCompletion(input: {
     tasks: Array<{
       taskGid: string;
@@ -1717,15 +1781,86 @@ export class AgentOrchestrator {
     });
   }
 
+  private async runOneTimeFocusPlan(input: {
+    user: User;
+    conversation: Conversation;
+    latestUserMessage: string;
+  }): Promise<string> {
+    const requestedSources = focusPlanRequestedSources(input.latestUserMessage);
+    const calendarWindow = calendarOverviewWindow("today", input.user.timezone);
+    const [gmailResult, calendarResult, asanaResult] = await Promise.all([
+      requestedSources.gmail
+        ? this.toolExecutor.executeToolCall(
+            "gmail_search_threads",
+            {
+              query: "in:inbox newer_than:1d",
+              maxResults: 10
+            },
+            input,
+            { force: true }
+          )
+        : Promise.resolve(null),
+      requestedSources.calendar
+        ? this.toolExecutor.executeToolCall(
+            "calendar_list_events",
+            {
+              timeMin: calendarWindow.timeMin,
+              timeMax: calendarWindow.timeMax,
+              maxResults: 50
+            },
+            input,
+            { force: true }
+          )
+        : Promise.resolve(null),
+      requestedSources.asana
+        ? this.toolExecutor.executeToolCall(
+            "asana_list_my_tasks",
+            {
+              completed: false,
+              limit: 50,
+              sortBy: "due",
+              sortDirection: "asc"
+            },
+            input,
+            { force: true }
+          )
+        : Promise.resolve(null)
+    ]);
+
+    const memoryEntries = await this.longTermMemory.getRecentEntriesForContext(input.user.id);
+    const briefingSnapshot = buildDailyBriefingSnapshot({
+      gmailResult,
+      calendarResult,
+      asanaResult,
+      memoryEntries,
+      timezone: input.user.timezone
+    });
+    const personalContextGraph = await this.loadPersonalContextGraphForDigest(
+      input.user.id,
+      input.latestUserMessage,
+      briefingSnapshot
+    );
+
+    return formatOneTimeFocusPlan({
+      gmailResult,
+      calendarResult,
+      asanaResult,
+      requestedSources,
+      briefingSnapshot,
+      personalContextGraph
+    });
+  }
+
   private async loadPersonalContextGraphForPrompt(
     userId: string,
-    query: string
+    query: string,
+    options: { fallbackHighSignal?: boolean } = {}
   ): Promise<string[]> {
     try {
       return await this.contextGraphService.getPromptContextLines(userId, query, {
         limit: 7,
         includeAgentContext: true,
-        fallbackHighSignal: true
+        fallbackHighSignal: options.fallbackHighSignal ?? true
       });
     } catch (error) {
       logger.warn({ error }, "Failed to load Obsidian context graph for prompt");
@@ -1949,6 +2084,16 @@ function isHighConfidenceConfirmationRoute(route: IntentRoute): boolean {
   );
 }
 
+function requiresDirectContextGraphMatch(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
+  return (
+    /\bwhat do you know about\b/.test(normalized) ||
+    /\bwhat am i doing with\b/.test(normalized) ||
+    /\bwhat are my\b.*\bprojects?\b/.test(normalized) ||
+    /\bcontext graph\b/.test(normalized)
+  );
+}
+
 function routeEntityValue(route: IntentRoute, type: string): string | null {
   return route.entities.find((entity) => entity.type === type)?.value ?? null;
 }
@@ -2083,6 +2228,152 @@ function formatMissingAutomationRetryReply(input: {
   return sections.join("\n\n");
 }
 
+interface FocusPlanRequestedSources {
+  gmail: boolean;
+  calendar: boolean;
+  asana: boolean;
+}
+
+function focusPlanRequestedSources(text: string): FocusPlanRequestedSources {
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
+  return {
+    gmail: /\b(gmail|email|emails|inbox|mail)\b/.test(normalized),
+    calendar: /\b(calendar|cal|schedule|agenda)\b/.test(normalized),
+    asana: /\b(asana|tasks?|my tasks)\b/.test(normalized)
+  };
+}
+
+function formatOneTimeFocusPlan(input: {
+  gmailResult: ToolExecutionResult | null;
+  calendarResult: ToolExecutionResult | null;
+  asanaResult: ToolExecutionResult | null;
+  requestedSources: FocusPlanRequestedSources;
+  briefingSnapshot: DailyBriefingSnapshot;
+  personalContextGraph: ObsidianContextGraphSearchResult[];
+}): string {
+  const requested = requestedSourceLabels(input.requestedSources);
+  const loaded = loadedSourceLabels(input);
+  const failed = failedSourceLabels(input);
+  const contextLinks = formatOneTimeDigestContextLinks(input.personalContextGraph).slice(0, 3);
+  const liveSignals = formatFocusPlanLiveSignals(input.briefingSnapshot).slice(0, 4);
+  const sections = ["Focus plan"];
+
+  if (!loaded.length && failed.length) {
+    sections.push(
+      `At a glance: I couldn't verify live ${failed.join(", ")} for this focus plan, so this is based on the read-only context graph only.`
+    );
+  } else {
+    sections.push(
+      `At a glance: ${loaded.length ? `Verified ${loaded.join(", ")}` : `Checked ${requested.join(", ")}`}${failed.length ? `; ${failed.join(", ")} unavailable` : ""}. Context graph is read-only background.`
+    );
+  }
+
+  if (liveSignals.length) {
+    sections.push(["Live signals:", ...liveSignals.map((line) => `- ${line}`)].join("\n"));
+  }
+
+  if (contextLinks.length) {
+    sections.push(["Context graph:", ...contextLinks.map((line) => `- ${line}`)].join("\n"));
+  }
+
+  const priorities = formatFocusPlanPriorities(liveSignals, contextLinks, failed);
+  if (priorities.length) {
+    sections.push(["Today:", ...priorities.map((line) => `- ${line}`)].join("\n"));
+  }
+
+  if (failed.length) {
+    sections.push(
+      ["Repair:", ...formatFocusPlanRepairs(input).map((line) => `- ${line}`)].join("\n")
+    );
+  }
+
+  return sections.join("\n\n");
+}
+
+function requestedSourceLabels(sources: FocusPlanRequestedSources): string[] {
+  return [
+    sources.gmail ? "Gmail" : null,
+    sources.calendar ? "Calendar" : null,
+    sources.asana ? "Asana" : null
+  ].filter((source): source is string => Boolean(source));
+}
+
+function loadedSourceLabels(input: {
+  gmailResult: ToolExecutionResult | null;
+  calendarResult: ToolExecutionResult | null;
+  asanaResult: ToolExecutionResult | null;
+}): string[] {
+  return [
+    input.gmailResult?.ok ? "Gmail" : null,
+    input.calendarResult?.ok ? "Calendar" : null,
+    input.asanaResult?.ok ? "Asana" : null
+  ].filter((source): source is string => Boolean(source));
+}
+
+function failedSourceLabels(input: {
+  gmailResult: ToolExecutionResult | null;
+  calendarResult: ToolExecutionResult | null;
+  asanaResult: ToolExecutionResult | null;
+}): string[] {
+  return [
+    input.gmailResult && !input.gmailResult.ok ? "Gmail" : null,
+    input.calendarResult && !input.calendarResult.ok ? "Calendar" : null,
+    input.asanaResult && !input.asanaResult.ok ? "Asana" : null
+  ].filter((source): source is string => Boolean(source));
+}
+
+function formatFocusPlanLiveSignals(snapshot: DailyBriefingSnapshot): string[] {
+  return snapshot.selectedFacts.slice(0, 4).map((fact) => {
+    const detail = fact.summary ? `: ${truncateSentence(fact.summary, 120)}` : "";
+    return `${capitalize(fact.source)}: ${fact.title}${detail}`;
+  });
+}
+
+function formatFocusPlanPriorities(
+  liveSignals: string[],
+  contextLinks: string[],
+  failedSources: string[]
+): string[] {
+  const priorities: string[] = [];
+  const primaryLiveSignal = liveSignals[0];
+  if (primaryLiveSignal) {
+    priorities.push(`Start with the highest-signal live item: ${primaryLiveSignal}`);
+  }
+  const primaryContextLink = contextLinks[0];
+  if (primaryContextLink) {
+    priorities.push(`Use ${primaryContextLink.split(":")[0]} as the main context thread, but keep the next step concrete.`);
+  }
+  if (failedSources.length) {
+    priorities.push(`Treat this as provisional until ${failedSources.join(" and ")} are back online.`);
+  }
+  if (!priorities.length) {
+    priorities.push("I do not have enough live data or graph matches to rank today cleanly yet.");
+  }
+  return priorities.slice(0, 3);
+}
+
+function formatFocusPlanRepairs(input: {
+  gmailResult: ToolExecutionResult | null;
+  calendarResult: ToolExecutionResult | null;
+  asanaResult: ToolExecutionResult | null;
+}): string[] {
+  return [
+    input.gmailResult && !input.gmailResult.ok
+      ? `Gmail: ${compactFailureMessage(input.gmailResult, "recent inbox threads did not load")}`
+      : null,
+    input.calendarResult && !input.calendarResult.ok
+      ? `Calendar: ${compactFailureMessage(input.calendarResult, "today's calendar did not load")}`
+      : null,
+    input.asanaResult && !input.asanaResult.ok
+      ? `Asana: ${compactFailureMessage(input.asanaResult, "open My Tasks did not load")}`
+      : null
+  ].filter((line): line is string => Boolean(line));
+}
+
+function compactFailureMessage(result: ToolExecutionResult, fallback: string): string {
+  return truncateSentence(result.userMessage ?? fallback, 180);
+}
+
 function formatOneTimeMorningDigest(input: {
   gmailResult: ToolExecutionResult;
   calendarResult: ToolExecutionResult;
@@ -2095,6 +2386,19 @@ function formatOneTimeMorningDigest(input: {
     "Morning email, calendar, and Asana digest",
     `At a glance: ${formatOneTimeDigestGlance(input)}`
   ];
+
+  if (!input.gmailResult.ok && !input.calendarResult.ok && !input.asanaResult.ok) {
+    return [
+      "Morning email, calendar, and Asana digest",
+      "At a glance: I couldn't load Gmail, Calendar, or Asana for this run, so there is no verified digest yet.",
+      [
+        "Action items:",
+        `- Gmail: ${compactFailureMessage(input.gmailResult, "recent inbox threads did not load")}`,
+        `- Calendar: ${compactFailureMessage(input.calendarResult, "today's calendar did not load")}`,
+        `- Asana: ${compactFailureMessage(input.asanaResult, "open My Tasks did not load")}`
+      ].join("\n")
+    ].join("\n\n");
+  }
 
   if (input.gmailResult.ok) {
     sections.push(
@@ -2260,6 +2564,10 @@ function countItems(data: unknown): number {
 
 function plural(count: number, noun: string): string {
   return count === 1 ? noun : `${noun}s`;
+}
+
+function capitalize(value: string): string {
+  return value ? `${value[0]!.toUpperCase()}${value.slice(1)}` : value;
 }
 
 function previousDigestSourceFailed(previous: string, sourcePatterns: RegExp[]): boolean {
@@ -2596,6 +2904,38 @@ function formatAsanaMultiCreateMessage(
   }
 
   return sections.join("\n\n") || "I couldn't identify any Asana tasks to create.";
+}
+
+function formatAsanaCalendarCreateMessage(
+  shortcut: AsanaCalendarCreateShortcut,
+  asanaResult: ToolExecutionResult,
+  calendarResult: ToolExecutionResult
+): string {
+  const sections: string[] = [];
+
+  if (asanaResult.ok) {
+    sections.push(`Asana: ${firstLine(asanaResult.userMessage) || `Created: ${shortcut.title}`}`);
+  } else {
+    sections.push(
+      `Asana: ${asanaResult.userMessage ?? "I couldn't create that Asana task."}`
+    );
+  }
+
+  if (calendarResult.ok) {
+    sections.push(
+      `Calendar: ${firstLine(calendarResult.userMessage) || `Booked: ${shortcut.title}`}`
+    );
+  } else {
+    sections.push(
+      `Calendar: ${calendarResult.userMessage ?? "I couldn't create that calendar event."}`
+    );
+  }
+
+  return sections.join("\n");
+}
+
+function firstLine(value: string | undefined): string {
+  return value?.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
 }
 
 function formatAsanaDueDateUpdateReply(

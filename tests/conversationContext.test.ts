@@ -7,6 +7,7 @@ import { classifyIntentRoute } from "../src/modules/agent/intentRouter";
 
 describe("conversation context", () => {
   it("keeps only active-app context while preserving user preferences", () => {
+    const recentContextDate = new Date();
     const context = buildConversationContext({
       latestUserMessage: "append this to the same doc",
       memoryEntries: [
@@ -17,7 +18,7 @@ describe("conversation context", () => {
             title: "Strategy Notes",
             url: "https://docs.google.com/document/d/doc_123/edit"
           },
-          updatedAt: new Date("2026-04-23T00:00:00.000Z")
+          updatedAt: recentContextDate
         },
         {
           key: "recent_asana_tasks",
@@ -27,7 +28,7 @@ describe("conversation context", () => {
               name: "Ship the launch plan"
             }
           ],
-          updatedAt: new Date("2026-04-22T00:00:00.000Z")
+          updatedAt: recentContextDate
         },
         {
           key: "preferred_email_tone",

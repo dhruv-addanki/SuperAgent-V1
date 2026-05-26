@@ -624,6 +624,11 @@ export class ToolExecutor {
     userId: string,
     workspace: { workspaceGid: string; name?: string }
   ): Promise<void> {
+    if (!this.looksLikeAsanaGid(workspace.workspaceGid)) {
+      await this.forgetRecentAsanaWorkspace(userId);
+      return;
+    }
+
     await this.prisma.memoryEntry.upsert({
       where: { userId_key: { userId, key: "recent_asana_workspace" } },
       update: {
@@ -643,6 +648,23 @@ export class ToolExecutor {
         confidence: 1
       }
     });
+  }
+
+  private async forgetRecentAsanaWorkspace(userId: string): Promise<void> {
+    const delegate = (this.prisma as any).memoryEntry;
+    try {
+      if (delegate?.delete) {
+        await delegate.delete({
+          where: { userId_key: { userId, key: "recent_asana_workspace" } }
+        });
+      } else if (delegate?.deleteMany) {
+        await delegate.deleteMany({
+          where: { userId, key: "recent_asana_workspace" }
+        });
+      }
+    } catch {
+      // Missing stale workspace memory should not block the user's Asana action.
+    }
   }
 
   private async rememberRecentAsanaTasks(userId: string, tasks: AsanaTaskSummary[]): Promise<void> {
@@ -865,6 +887,11 @@ export class ToolExecutor {
         ? (entry.value as { workspaceGid: string }).workspaceGid
         : null;
 
+    if (workspaceGid && !this.looksLikeAsanaGid(workspaceGid)) {
+      await this.forgetRecentAsanaWorkspace(userId);
+      return null;
+    }
+
     return workspaceGid;
   }
 
@@ -873,15 +900,25 @@ export class ToolExecutor {
     service: AsanaService,
     requestedWorkspaceGid?: string
   ): Promise<string> {
-    if (requestedWorkspaceGid) {
+    if (requestedWorkspaceGid && this.looksLikeAsanaGid(requestedWorkspaceGid)) {
       await this.rememberRecentAsanaWorkspace(userId, { workspaceGid: requestedWorkspaceGid });
       return requestedWorkspaceGid;
     }
 
     const recentWorkspace = await this.getRecentAsanaWorkspace(userId);
-    if (recentWorkspace) return recentWorkspace;
-
     const workspaces = await service.listWorkspaces();
+    if (recentWorkspace) {
+      const matchingWorkspace = workspaces.find((workspace) => workspace.gid === recentWorkspace);
+      if (matchingWorkspace) {
+        await this.rememberRecentAsanaWorkspace(userId, {
+          workspaceGid: matchingWorkspace.gid,
+          name: matchingWorkspace.name
+        });
+        return matchingWorkspace.gid;
+      }
+      await this.forgetRecentAsanaWorkspace(userId);
+    }
+
     if (workspaces.length === 1) {
       const workspace = workspaces[0];
       await this.rememberRecentAsanaWorkspace(userId, {
@@ -2217,9 +2254,14 @@ export class ToolExecutor {
       }
 
       const defaultMessage =
-        userMessageForError(error) === "I hit a problem handling that. Please try again."
+        toolName.startsWith("asana_") && isAsanaInvalidWorkspaceError(error)
+          ? "Your saved Asana workspace looked invalid, so I cleared it. Retry the request, or ask me to list Asana workspaces if you have more than one."
+          : userMessageForError(error) === "I hit a problem handling that. Please try again."
           ? defaultToolFailureMessage(toolName)
           : userMessageForError(error);
+      if (toolName.startsWith("asana_") && isAsanaInvalidWorkspaceError(error)) {
+        await this.forgetRecentAsanaWorkspace(context.user.id);
+      }
 
       return {
         ok: false,
@@ -2236,6 +2278,14 @@ function errorCode(error: unknown): string {
     if (typeof code === "string" && code.trim()) return code;
   }
   return "ASANA_UNKNOWN_ERROR";
+}
+
+function isAsanaInvalidWorkspaceError(error: unknown): boolean {
+  const serialized = serializeError(error);
+  return (
+    errorCode(error) === "ASANA_BAD_REQUEST" &&
+    /\bworkspace:\s*not a long\b/i.test(serialized)
+  );
 }
 
 function shouldUseAsanaAssignedWriteFallback(error: unknown, assigneeGid: unknown): boolean {

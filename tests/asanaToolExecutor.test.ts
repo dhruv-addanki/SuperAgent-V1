@@ -55,6 +55,11 @@ function makePrisma(initialMemory: Record<string, unknown> = {}) {
           confidence: update?.confidence ?? create.confidence
         });
         return memory.get(key);
+      }),
+      delete: vi.fn(async ({ where }) => {
+        const key = where.userId_key.key;
+        memory.delete(key);
+        return {};
       })
     },
     asanaAccount: {
@@ -301,6 +306,74 @@ describe("tool executor Asana flows", () => {
       assigneeGid: "user_asana_1"
     });
     expect(prisma.memoryEntry.upsert).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores invalid requested workspace values instead of sending them to Asana", async () => {
+    const prisma = makePrisma();
+    const executor = makeExecutor(prisma);
+
+    const result = await executor.executeToolCall(
+      "asana_create_task",
+      { workspaceGid: "Unnamed", name: "Check medical insurance with mom" },
+      makeContext("Add check medical insurance with mom as asana task due today")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceGid: "workspace_1",
+        name: "Check medical insurance with mom"
+      })
+    );
+    expect(prisma.memoryEntry.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          value: expect.objectContaining({ workspaceGid: "Unnamed" })
+        })
+      })
+    );
+  });
+
+  it("clears invalid recent workspace memory and auto-selects a single real workspace", async () => {
+    const prisma = makePrisma({
+      recent_asana_workspace: { workspaceGid: "Unnamed", name: "Unnamed" }
+    });
+    const executor = makeExecutor(prisma);
+
+    const result = await executor.executeToolCall(
+      "asana_list_my_tasks",
+      { completed: false },
+      makeContext("Show my Asana tasks")
+    );
+
+    expect(result.ok).toBe(true);
+    expect(prisma.memoryEntry.delete).toHaveBeenCalledWith({
+      where: { userId_key: { userId: "user_1", key: "recent_asana_workspace" } }
+    });
+    expect(listMyTasksMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceGid: "workspace_1" })
+    );
+  });
+
+  it("asks for workspace selection when invalid recent memory leaves multiple workspaces", async () => {
+    listWorkspacesMock.mockResolvedValue([
+      { gid: "workspace_1", name: "Product" },
+      { gid: "workspace_2", name: "School" }
+    ]);
+    const prisma = makePrisma({
+      recent_asana_workspace: { workspaceGid: "Unnamed", name: "Unnamed" }
+    });
+    const executor = makeExecutor(prisma);
+
+    const result = await executor.executeToolCall(
+      "asana_list_my_tasks",
+      { completed: false },
+      makeContext("Show my Asana tasks")
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.userMessage).toContain("multiple Asana workspaces");
+    expect(listMyTasksMock).not.toHaveBeenCalled();
   });
 
   it("defaults project task creation to the connected Asana user", async () => {

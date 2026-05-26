@@ -10,6 +10,7 @@ vi.mock("../src/modules/agent/responseLoop", () => ({
 
 import { AgentOrchestrator } from "../src/modules/agent/agentOrchestrator";
 import { ToolExecutor } from "../src/modules/agent/toolExecutor";
+import { ObsidianContextGraphService } from "../src/modules/contextGraph/obsidianContextGraphService";
 import { UserFacingError } from "../src/lib/errors";
 
 describe("agent orchestrator", () => {
@@ -3510,6 +3511,283 @@ describe("agent orchestrator", () => {
         "- script video (assignee Dhruv Addanki)",
         "- Call Rohan (assignee Dhruv Addanki)"
       ].join("\n")
+    );
+  });
+
+  it("creates an Asana task and calendar event through the deterministic compound shortcut", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-21T15:47:00.000Z"));
+    const executeToolCallSpy = vi
+      .spyOn(ToolExecutor.prototype, "executeToolCall")
+      .mockImplementation(async (toolName: string, rawInput: any) => {
+        if (toolName === "asana_create_task") {
+          return {
+            ok: true,
+            data: {
+              gid: "task_1",
+              name: rawInput.name,
+              dueOn: rawInput.dueOn,
+              completed: false
+            },
+            userMessage: `Created: ${rawInput.name}\nDue: ${rawInput.dueOn}`
+          };
+        }
+        if (toolName === "calendar_create_event") {
+          return {
+            ok: true,
+            data: {
+              id: "event_1",
+              title: rawInput.title,
+              start: rawInput.start,
+              end: rawInput.end
+            },
+            userMessage: `Booked: ${rawInput.title} at Thu, May 21, 2026 7:00 PM EDT.`
+          };
+        }
+        return { ok: false, error: "unexpected tool" };
+      });
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({ id: "conversation_1", userId: "user_1" }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Add check medical insurance with mom as asana task due today and also add it to calendar at 7-7:30"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "asana_create_task",
+      { name: "check medical insurance with mom", dueOn: "2026-05-21" },
+      expect.objectContaining({
+        latestUserMessage:
+          "Add check medical insurance with mom as asana task due today and also add it to calendar at 7-7:30"
+      }),
+      { force: true }
+    );
+    expect(executeToolCallSpy).toHaveBeenCalledWith(
+      "calendar_create_event",
+      {
+        title: "check medical insurance with mom",
+        start: "2026-05-21T23:00:00.000Z",
+        end: "2026-05-21T23:30:00.000Z"
+      },
+      expect.anything(),
+      { force: true }
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      [
+        "Asana: Created: check medical insurance with mom",
+        "Calendar: Booked: check medical insurance with mom at Thu, May 21, 2026 7:00 PM EDT."
+      ].join("\n")
+    );
+  });
+
+  it("reports clean partial success when compound Asana creation fails but Calendar succeeds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-21T15:47:00.000Z"));
+    vi.spyOn(ToolExecutor.prototype, "executeToolCall").mockImplementation(
+      async (toolName: string, rawInput: any) => {
+        if (toolName === "asana_create_task") {
+          return {
+            ok: false,
+            error: "ASANA_WORKSPACE_SELECTION_REQUIRED",
+            userMessage: "You have multiple Asana workspaces. Ask me to list Asana workspaces and pick one."
+          };
+        }
+        if (toolName === "calendar_create_event") {
+          return {
+            ok: true,
+            data: { id: "event_1", title: rawInput.title, start: rawInput.start },
+            userMessage: `Booked: ${rawInput.title} at Thu, May 21, 2026 7:00 PM EDT.`
+          };
+        }
+        return { ok: false, error: "unexpected tool" };
+      }
+    );
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({ id: "conversation_1", userId: "user_1" }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "Add check medical insurance with mom as asana task due today and also add it to calendar at 7-7:30"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Calendar: Booked: check medical insurance with mom")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Asana: You have multiple Asana workspaces")
+    );
+    expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Completed: Tool")
+    );
+  });
+
+  it("builds a context-backed focus plan when live Calendar and Asana fail", async () => {
+    vi.spyOn(ToolExecutor.prototype, "executeToolCall").mockImplementation(async (toolName: string) => {
+      if (toolName === "calendar_list_events") {
+        return {
+          ok: false,
+          error: "GOOGLE_AUTH_REQUIRED",
+          userMessage: "Reconnect Google Calendar first."
+        };
+      }
+      if (toolName === "asana_list_my_tasks") {
+        return {
+          ok: false,
+          error: "ASANA_WORKSPACE_SELECTION_REQUIRED",
+          userMessage: "You have multiple Asana workspaces. Ask me to list Asana workspaces and pick one."
+        };
+      }
+      return { ok: false, error: "unexpected tool" };
+    });
+    vi.spyOn(ObsidianContextGraphService.prototype, "search").mockResolvedValue([
+      {
+        pcgId: "project_scann",
+        label: "Scann.ai",
+        type: "project",
+        summary: "AI-driven 3D body scanning and adaptive fitness product.",
+        aliases: [],
+        evidenceCount: 5,
+        confidence: 0.99,
+        path: "/vault/Personal Context Graph/Scann.ai.md",
+        score: 3
+      } as any
+    ]);
+
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({ id: "conversation_1", userId: "user_1" }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      }
+    } as any;
+
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "What should I focus on today based on my calendar, Asana, and context graph?"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("read-only context graph only")
+    );
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Scann.ai")
+    );
+    expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("context_graph_search")
+    );
+    expect(whatsappService.sendTextMessage).not.toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Completed:")
     );
   });
 

@@ -359,6 +359,110 @@ describe("response loop", () => {
     expect((client.createResponse as any).mock.calls).toHaveLength(1);
   });
 
+  it("hides successful context graph lookups from partial tool status messages", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi.fn(async () => ({
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_context",
+            name: "context_graph_search",
+            arguments: JSON.stringify({
+              query: "Scann posture"
+            })
+          },
+          {
+            type: "function_call",
+            call_id: "call_calendar",
+            name: "calendar_list_events",
+            arguments: JSON.stringify({
+              timeMin: "2026-04-24T04:00:00.000Z",
+              timeMax: "2026-04-25T04:00:00.000Z"
+            })
+          }
+        ]
+      }))
+    };
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "what should I focus on today" }],
+      executeTool: vi.fn(async (toolName: string) =>
+        toolName === "context_graph_search"
+          ? {
+              ok: true,
+              data: [{ label: "Scann.ai" }]
+            }
+          : {
+              ok: false,
+              error: "GOOGLE_AUTH_REQUIRED",
+              userMessage: "Reconnect Google Calendar and try again."
+            }
+      ),
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).not.toContain("Completed:");
+    expect(result.assistantMessage).not.toContain("context_graph_search");
+    expect(result.assistantMessage).not.toContain("Tool:");
+    expect(result.assistantMessage).toContain("Couldn't complete:");
+    expect(result.assistantMessage).toContain("Calendar: Reconnect Google Calendar and try again.");
+  });
+
+  it("labels failed context graph lookups instead of generic Tool", async () => {
+    const client: ResponsesClient = {
+      createResponse: vi.fn(async () => ({
+        output: [
+          {
+            type: "function_call",
+            call_id: "call_web",
+            name: "web_search",
+            arguments: JSON.stringify({ query: "NVDA stock news today" })
+          },
+          {
+            type: "function_call",
+            call_id: "call_context",
+            name: "context_graph_search",
+            arguments: JSON.stringify({ query: "Tech Force" })
+          }
+        ]
+      }))
+    };
+
+    const result = await runResponseLoop({
+      client,
+      model: "gpt-5.4",
+      instructions: "test",
+      tools: [],
+      input: [{ role: "user", content: "search web and context" }],
+      executeTool: vi.fn(async (toolName: string) =>
+        toolName === "web_search"
+          ? {
+              ok: true,
+              data: {
+                query: "NVDA stock news today",
+                summary: "NVDA rose on AI chip demand.",
+                sources: []
+              }
+            }
+          : {
+              ok: false,
+              error: "CONTEXT_GRAPH_UNAVAILABLE"
+            }
+      ),
+      maxToolRounds: 3
+    });
+
+    expect(result.assistantMessage).toContain("Web: NVDA rose on AI chip demand.");
+    expect(result.assistantMessage).toContain(
+      "Context graph: I couldn't complete that step."
+    );
+    expect(result.assistantMessage).not.toContain("Tool:");
+  });
+
   it("can continue after partial tool failures so scheduled digests stay human-readable", async () => {
     const client: ResponsesClient = {
       createResponse: vi

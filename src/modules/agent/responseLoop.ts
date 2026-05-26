@@ -203,6 +203,8 @@ function formatBatchStatusMessage(executedCalls: ExecutedToolCall[]): string {
   const failed: string[] = [];
 
   for (const { call, result } of executedCalls) {
+    if (isSilentSuccessfulToolCall(call, result)) continue;
+
     const summary = summarizeToolCall(call, result);
     if (result.approvalRequired) {
       needsAttention.push(summary);
@@ -219,6 +221,10 @@ function formatBatchStatusMessage(executedCalls: ExecutedToolCall[]): string {
     sections.push(formatStatusSection("Needs confirmation:", needsAttention));
   if (failed.length) sections.push(formatStatusSection("Couldn't complete:", failed));
   return sections.join("\n\n") || "Done.";
+}
+
+function isSilentSuccessfulToolCall(call: FunctionCall, result: ToolExecutionResult): boolean {
+  return result.ok && call.name === "context_graph_search";
 }
 
 function summarizeToolCall(call: FunctionCall, result: ToolExecutionResult): string {
@@ -247,6 +253,7 @@ function toolLabel(toolName: string): string {
   if (toolName.startsWith("docs_")) return "Docs";
   if (toolName.startsWith("notion_")) return "Notion";
   if (toolName.startsWith("automation_")) return "Automation";
+  if (toolName === "context_graph_search") return "Context graph";
   if (toolName === "web_search") return "Web";
   return "Tool";
 }
