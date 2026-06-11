@@ -66,6 +66,7 @@ function makePrisma(initialMemory: Record<string, unknown> = {}) {
       findUnique: vi.fn(async () => ({ asanaUserGid: "user_asana_1" }))
     },
     pendingAction: {
+      updateMany: vi.fn(async () => ({ count: 0 })),
       create: vi.fn(async ({ data }) => ({
         id: "pending_1",
         ...data

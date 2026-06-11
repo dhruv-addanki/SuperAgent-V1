@@ -2,6 +2,7 @@ import { PendingActionStatus } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPendingActionContext,
+  createPendingAction,
   getApprovalDecision,
   matchesPositiveConfirmation,
   parseConfirmationIntent,
@@ -57,6 +58,34 @@ describe("approval policy", () => {
     expect(decision.confirmationKeyword).toBe("CONFIRM");
     expect(decision.confirmationMessage).toContain('Create automation "Morning brief"?');
     expect(decision.confirmationMessage).toContain("Every day at 8:00 AM America/New_York");
+  });
+
+  it("requires confirmation for selector-based automation updates and deletes", () => {
+    const updateDecision = getApprovalDecision(
+      "automation_update",
+      {
+        selector: "Creepy",
+        replaceText: { from: "Creepy", to: "Kriti" }
+      },
+      "edit it to Kriti not Creepy"
+    );
+    expect(updateDecision.requiresApproval).toBe(true);
+    expect(updateDecision.confirmationMessage).toContain('Update automation matching "Creepy"?');
+
+    const selectorDeleteDecision = getApprovalDecision(
+      "automation_delete",
+      { selector: "daily digest" },
+      "delete the daily digest automation"
+    );
+    expect(selectorDeleteDecision.requiresApproval).toBe(true);
+    expect(selectorDeleteDecision.confirmationMessage).toContain(
+      'Delete automation matching "daily digest"?'
+    );
+
+    expect(
+      getApprovalDecision("automation_delete", { number: 1 }, "delete automation 1")
+        .requiresApproval
+    ).toBe(false);
   });
 
   it("allows calendar writes without extra approval", () => {
@@ -167,6 +196,42 @@ describe("approval policy", () => {
     const result = await resolvePendingActionFromConversation(prisma as any, "u1", "c1", now);
     expect(result?.id).toBe("active");
     expect(actions[0]!.status).toBe(PendingActionStatus.EXPIRED);
+  });
+
+  it("cancels older pending actions of the same type before creating a new pending action", async () => {
+    const prisma = {
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 1 })),
+        create: vi.fn(async ({ data }) => ({ id: "pending_new", ...data }))
+      }
+    };
+
+    await createPendingAction(prisma as any, {
+      userId: "user_1",
+      conversationId: "conversation_1",
+      actionType: "automation_create",
+      payload: {
+        toolName: "automation_create",
+        input: {
+          name: "Daily reminder to track points with Kriti",
+          prompt: "Track points with Kriti.",
+          schedule: { frequency: "daily", time: "23:00" },
+          timezone: "America/New_York"
+        },
+        confirmationKeyword: "CONFIRM"
+      }
+    });
+
+    expect(prisma.pendingAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user_1",
+        conversationId: "conversation_1",
+        actionType: "automation_create",
+        status: PendingActionStatus.PENDING
+      },
+      data: { status: PendingActionStatus.CANCELLED }
+    });
+    expect(prisma.pendingAction.create).toHaveBeenCalledOnce();
   });
 
   it("formats pending draft context for the prompt", () => {

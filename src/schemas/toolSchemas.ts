@@ -385,6 +385,47 @@ export const toolInputSchemas = {
     })
     .strict(),
 
+  automation_update: z
+    .object({
+      automationId: z.string().min(1).optional(),
+      number: z.number().int().positive().optional(),
+      selector: z.string().min(1).optional(),
+      name: z.string().min(1).max(120).optional(),
+      prompt: z.string().min(1).max(4000).optional(),
+      schedule: automationSchedule.optional(),
+      timezone: z.string().min(1).optional(),
+      replaceText: z
+        .object({
+          from: z.string().min(1).max(120),
+          to: z.string().min(1).max(120)
+        })
+        .strict()
+        .optional()
+    })
+    .strict()
+    .superRefine((input, ctx) => {
+      if (!input.automationId && !input.number && !input.selector) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["automationId", "number", "selector"],
+          message: "Provide an automationId, number, or selector."
+        });
+      }
+      if (
+        input.name === undefined &&
+        input.prompt === undefined &&
+        input.schedule === undefined &&
+        input.timezone === undefined &&
+        input.replaceText === undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["name", "prompt", "schedule", "timezone", "replaceText"],
+          message: "Provide at least one automation update."
+        });
+      }
+    }),
+
   automation_delete: z
     .object({
       automationId: z.string().min(1).optional(),
@@ -465,6 +506,8 @@ export const toolDescriptions: Record<ToolName, string> = {
     "Pause an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector.",
   automation_resume:
     "Resume an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector.",
+  automation_update:
+    "Update an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector. For corrections like 'Kriti not Creepy', use replaceText instead of deleting and recreating.",
   automation_delete:
     "Delete an existing scheduled automation. Use automationId from context, number from a recent automation list, or a clear name selector."
 };
@@ -512,6 +555,7 @@ export const writeToolNames = [
   "automation_create",
   "automation_pause",
   "automation_resume",
+  "automation_update",
   "automation_delete"
 ] as const satisfies readonly ToolName[];
 

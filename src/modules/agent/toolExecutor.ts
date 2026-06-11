@@ -23,6 +23,7 @@ import {
   AutomationService,
   formatAutomationCreated,
   formatAutomationList,
+  formatAutomationUpdated,
   summarizeAutomation
 } from "../automation/automationService";
 import { digestFilterRulesFromMemory, type DigestFilterRule } from "../automation/dailyBriefing";
@@ -1587,6 +1588,27 @@ export class ToolExecutor {
           };
         }
 
+        if (toolName === "automation_update") {
+          const data = await this.automationService.updateAutomation(context.user.id, {
+            ...input,
+            now: new Date()
+          });
+          await this.audit.log({
+            userId: context.user.id,
+            actionType: "automation_update",
+            toolName,
+            requestPayload: input,
+            responsePayload: summarizeAutomation(data),
+            status: "executed"
+          });
+          return {
+            ok: true,
+            data: summarizeAutomation(data),
+            userMessage: formatAutomationUpdated(data),
+            stopAfterTool: true
+          };
+        }
+
         if (toolName === "automation_delete") {
           const data = await this.automationService.deleteAutomation(context.user.id, input);
           await this.audit.log({
@@ -2029,16 +2051,6 @@ export class ToolExecutor {
           requestPayload: input,
           responsePayload: data,
           status: "success"
-        });
-
-        await this.prisma.pendingAction.updateMany({
-          where: {
-            userId: context.user.id,
-            conversationId: context.conversation.id,
-            actionType: "gmail_send_draft",
-            status: PendingActionStatus.PENDING
-          },
-          data: { status: PendingActionStatus.CANCELLED }
         });
 
         await createPendingAction(this.prisma, {

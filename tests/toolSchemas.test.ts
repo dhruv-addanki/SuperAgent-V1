@@ -35,6 +35,7 @@ describe("tool schemas", () => {
     expect(tools.some((tool) => tool.name === "automation_create")).toBe(false);
     expect(tools.some((tool) => tool.name === "automation_pause")).toBe(false);
     expect(tools.some((tool) => tool.name === "automation_resume")).toBe(false);
+    expect(tools.some((tool) => tool.name === "automation_update")).toBe(false);
     expect(tools.some((tool) => tool.name === "automation_delete")).toBe(false);
     expect(tools.some((tool) => tool.name === "web_search")).toBe(true);
     expect(tools.some((tool) => tool.name === "context_graph_search")).toBe(true);
@@ -217,5 +218,18 @@ describe("tool schemas", () => {
         number: 1
       }).number
     ).toBe(1);
+
+    expect(
+      toolInputSchemas.automation_update.parse({
+        selector: "Creepy",
+        replaceText: { from: "Creepy", to: "Kriti" }
+      }).replaceText?.to
+    ).toBe("Kriti");
+
+    expect(() =>
+      toolInputSchemas.automation_update.parse({
+        replaceText: { from: "Creepy", to: "Kriti" }
+      })
+    ).toThrow();
   });
 });

@@ -315,6 +315,51 @@ export class AgentOrchestrator {
           options.rawPayload
         );
       };
+
+      const pendingAutomationCorrection = shouldUseTextShortcuts
+        ? correctedAutomationCreateInputFromPending(preparedInput.text, pendingAction)
+        : null;
+      if (pendingAutomationCorrection) {
+        const result = await this.toolExecutor.executeToolCall(
+          "automation_create",
+          pendingAutomationCorrection,
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          }
+        );
+        await replyToUser(
+          result.userMessage ??
+            "Got it. I updated the pending automation. Reply yes to create it, or cancel.",
+          { allowSetupHint: false }
+        );
+        return;
+      }
+
+      const automationTextReplacement = shouldUseTextShortcuts
+        ? matchAutomationTextReplacementRequest(preparedInput.text)
+        : null;
+      if (automationTextReplacement) {
+        const result = await this.toolExecutor.executeToolCall(
+          "automation_update",
+          {
+            selector: automationTextReplacement.from,
+            replaceText: automationTextReplacement
+          },
+          {
+            user,
+            conversation,
+            latestUserMessage: preparedInput.text
+          },
+          { force: true }
+        );
+        await replyToUser(
+          result.userMessage ?? "I couldn't update that automation from the correction.",
+          { allowSetupHint: false }
+        );
+        return;
+      }
       const runModelFallback = async (promptSuffix = ""): Promise<string> => {
         const personalContextGraph = await this.loadPersonalContextGraphForPrompt(
           user.id,
@@ -2092,6 +2137,105 @@ function requiresDirectContextGraphMatch(text: string): boolean {
     /\bwhat are my\b.*\bprojects?\b/.test(normalized) ||
     /\bcontext graph\b/.test(normalized)
   );
+}
+
+interface AutomationTextReplacement {
+  from: string;
+  to: string;
+}
+
+function correctedAutomationCreateInputFromPending(
+  text: string,
+  pendingAction: PendingAction | null
+): Record<string, unknown> | null {
+  const replacement = matchAutomationTextReplacement(text);
+  if (!replacement || !pendingAction) return null;
+
+  const payload = pendingAction.payload as {
+    toolName?: unknown;
+    input?: unknown;
+  } | null;
+  if (payload?.toolName !== "automation_create" || !payload.input || typeof payload.input !== "object") {
+    return null;
+  }
+
+  const input = payload.input as Record<string, unknown>;
+  const corrected = { ...input };
+  let changed = false;
+
+  for (const field of ["name", "prompt"] as const) {
+    if (typeof corrected[field] !== "string") continue;
+    const updated = replaceTextCaseInsensitive(corrected[field], replacement.from, replacement.to);
+    if (updated !== corrected[field]) {
+      corrected[field] = updated;
+      changed = true;
+    }
+  }
+
+  return changed ? corrected : null;
+}
+
+function matchAutomationTextReplacementRequest(text: string): AutomationTextReplacement | null {
+  const replacement = matchAutomationTextReplacement(text);
+  if (!replacement) return null;
+  const normalized = text.toLowerCase().replace(/[’]/g, "'").replace(/\s+/g, " ");
+  const looksLikeAutomationEdit =
+    /\b(automation|reminder|recurring|daily|nightly|edit|change|rename|update|fix)\b/.test(
+      normalized
+    );
+  return looksLikeAutomationEdit ? replacement : null;
+}
+
+function matchAutomationTextReplacement(text: string): AutomationTextReplacement | null {
+  const patterns: Array<{ pattern: RegExp; reversed?: boolean }> = [
+    {
+      pattern:
+        /\b(?:no\s+)?(?:with|it's|its|it is|that's|that is|should be)\s+(.+?)\s+(?:not|instead of)\s+(.+?)(?:[.!?]|$)/i
+    },
+    {
+      pattern:
+        /\b(?:edit|change|rename|update|fix)\s+(?:it|that|the\s+automation|the\s+reminder)?\s*(?:to\s+)?(.+?)\s+(?:not|instead of)\s+(.+?)(?:[.!?]|$)/i
+    },
+    {
+      pattern:
+        /\b(?:not|instead of)\s+(.+?)\s+(?:use|make it|it should be|with)\s+(.+?)(?:[.!?]|$)/i,
+      reversed: true
+    }
+  ];
+
+  for (const { pattern, reversed } of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1] || !match[2]) continue;
+    const first = cleanupReplacementPhrase(match[1]);
+    const second = cleanupReplacementPhrase(match[2]);
+    const from = reversed ? first : second;
+    const to = reversed ? second : first;
+    if (from && to && from.toLowerCase() !== to.toLowerCase()) {
+      return { from, to };
+    }
+  }
+
+  return null;
+}
+
+function cleanupReplacementPhrase(value: string): string {
+  return value
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/^(?:to|with|as)\s+/i, "")
+    .replace(/\s+(?:automation|reminder)$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function replaceTextCaseInsensitive(value: string, from: string, to: string): string {
+  const needle = from.trim();
+  const replacement = to.trim();
+  if (!needle || !replacement) return value;
+  return value.replace(new RegExp(escapeReplacementRegExp(needle), "gi"), replacement);
+}
+
+function escapeReplacementRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function routeEntityValue(route: IntentRoute, type: string): string | null {

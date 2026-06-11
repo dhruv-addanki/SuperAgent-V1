@@ -256,6 +256,39 @@ describe("long term memory", () => {
     );
   });
 
+  it("stores explicit project naming preferences", async () => {
+    const upsert = vi.fn(async () => undefined);
+    const service = new LongTermMemory({
+      memoryEntry: {
+        findUnique: vi.fn(async () => null),
+        upsert
+      },
+      user: { update: vi.fn() }
+    } as any);
+
+    const result = await service.maybeExtractMemoryFromConversation(
+      { id: "user_1" },
+      "The name was switched to Scanis"
+    );
+
+    expect(result.projectNamingUpdated).toBe(true);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_key: { userId: "user_1", key: "project_naming_preferences" } },
+        update: {
+          value: {
+            preferences: [
+              {
+                currentName: "Scanis"
+              }
+            ]
+          },
+          confidence: 0.85
+        }
+      })
+    );
+  });
+
   it("ignores invalid timezones", async () => {
     const upsert = vi.fn(async () => undefined);
     const update = vi.fn(async () => undefined);

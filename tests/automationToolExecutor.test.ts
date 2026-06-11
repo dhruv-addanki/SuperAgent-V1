@@ -16,6 +16,7 @@ describe("tool executor automations", () => {
     const prisma = {
       auditLog: { create: vi.fn(async () => undefined) },
       pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
         create: vi.fn(async () => ({ id: "pending_1" }))
       }
     } as any;
@@ -42,6 +43,15 @@ describe("tool executor automations", () => {
 
     expect(result.approvalRequired).toBe(true);
     expect(result.userMessage).toContain('Create automation "Morning brief"?');
+    expect(prisma.pendingAction.updateMany).toHaveBeenCalledWith({
+      where: {
+        userId: "user_1",
+        conversationId: "conversation_1",
+        actionType: "automation_create",
+        status: PendingActionStatus.PENDING
+      },
+      data: { status: PendingActionStatus.CANCELLED }
+    });
     expect(prisma.pendingAction.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -125,5 +135,105 @@ describe("tool executor automations", () => {
       where: { id: "pending_1" },
       data: { status: PendingActionStatus.EXECUTED }
     });
+  });
+
+  it("updates an existing automation by replacing misheard text", async () => {
+    const existingAutomation = {
+      id: "automation_1",
+      userId: "user_1",
+      conversationId: "conversation_1",
+      channel: "WHATSAPP",
+      name: "Daily reminder to track points with Creepy",
+      prompt:
+        "Send a WhatsApp reminder every day at 11:00 PM to track points with Creepy.",
+      schedule: { frequency: "daily", time: "23:00" },
+      scheduleLabel: "Every day at 11:00 PM America/New_York",
+      timezone: "America/New_York",
+      status: AutomationStatus.ACTIVE,
+      nextRunAt: new Date("2026-04-25T03:00:00.000Z"),
+      lastRunAt: null,
+      lockedAt: null,
+      lockedBy: null,
+      lockExpiresAt: null,
+      createdAt: new Date("2026-04-24T11:00:00.000Z"),
+      updatedAt: new Date("2026-04-24T11:00:00.000Z")
+    };
+    const automationUpdate = vi.fn(async ({ data }) => ({
+      ...existingAutomation,
+      ...data,
+      updatedAt: new Date("2026-04-24T11:01:00.000Z")
+    }));
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      automation: {
+        findMany: vi.fn(async () => [existingAutomation]),
+        update: automationUpdate
+      }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn() } as any,
+      { getAccessTokenForUser: vi.fn() } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "automation_update",
+      {
+        selector: "Creepy",
+        replaceText: { from: "Creepy", to: "Kriti" }
+      },
+      {
+        user: { id: "user_1", timezone: "America/New_York" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "No can u edit it to with Kriti not creepy"
+      },
+      { force: true }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.userMessage).toContain("Updated automation: Daily reminder to track points with Kriti.");
+    expect(automationUpdate).toHaveBeenCalledWith({
+      where: { id: "automation_1" },
+      data: {
+        name: "Daily reminder to track points with Kriti",
+        prompt: "Send a WhatsApp reminder every day at 11:00 PM to track points with Kriti."
+      }
+    });
+  });
+
+  it("stages selector-based automation deletion behind confirmation", async () => {
+    const prisma = {
+      auditLog: { create: vi.fn(async () => undefined) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        create: vi.fn(async () => ({ id: "pending_delete" }))
+      },
+      automation: {
+        update: vi.fn()
+      }
+    } as any;
+
+    const executor = new ToolExecutor(
+      prisma,
+      { getOAuthClientForUser: vi.fn() } as any,
+      { getAccessTokenForUser: vi.fn() } as any
+    );
+
+    const result = await executor.executeToolCall(
+      "automation_delete",
+      { selector: "Morning email, calendar, and Asana digest" },
+      {
+        user: { id: "user_1", timezone: "America/New_York" } as any,
+        conversation: { id: "conversation_1" } as any,
+        latestUserMessage: "delete the morning digest automation"
+      }
+    );
+
+    expect(result.approvalRequired).toBe(true);
+    expect(result.userMessage).toContain(
+      'Delete automation matching "Morning email, calendar, and Asana digest"?'
+    );
+    expect(prisma.automation.update).not.toHaveBeenCalled();
   });
 });

@@ -33,6 +33,18 @@ export interface AutomationTargetInput {
   selector?: string;
 }
 
+export interface UpdateAutomationInput extends AutomationTargetInput {
+  name?: string;
+  prompt?: string;
+  schedule?: AutomationSchedule;
+  timezone?: string;
+  replaceText?: {
+    from: string;
+    to: string;
+  };
+  now?: Date;
+}
+
 export interface AutomationSummary {
   id: string;
   name: string;
@@ -138,6 +150,62 @@ export class AutomationService {
         lockedBy: null,
         lockExpiresAt: null
       }
+    });
+  }
+
+  async updateAutomation(userId: string, input: UpdateAutomationInput): Promise<Automation> {
+    const automation = await this.resolveAutomationTarget(userId, input);
+    const data: Prisma.AutomationUpdateInput = {};
+
+    const name =
+      typeof input.name === "string"
+        ? formatAutomationName(input.name)
+        : input.replaceText
+          ? replaceTextCaseInsensitive(automation.name, input.replaceText.from, input.replaceText.to)
+          : undefined;
+    if (name && name !== automation.name) {
+      data.name = name;
+    }
+
+    const prompt =
+      typeof input.prompt === "string"
+        ? input.prompt.trim()
+        : input.replaceText
+          ? replaceTextCaseInsensitive(automation.prompt, input.replaceText.from, input.replaceText.to)
+          : undefined;
+    if (prompt && prompt !== automation.prompt) {
+      data.prompt = prompt;
+    }
+
+    if (input.schedule || input.timezone) {
+      const timezone = input.timezone ?? automation.timezone;
+      if (!isValidTimezone(timezone)) {
+        throw new UserFacingError(
+          "Invalid automation timezone",
+          "AUTOMATION_INVALID_TIMEZONE",
+          "I couldn't update that automation because the timezone is invalid."
+        );
+      }
+      const schedule = input.schedule
+        ? normalizeAutomationSchedule(input.schedule)
+        : normalizeAutomationSchedule(automation.schedule);
+      data.schedule = schedule as unknown as Prisma.InputJsonValue;
+      data.timezone = timezone;
+      data.scheduleLabel = formatScheduleLabel(schedule, timezone);
+      data.nextRunAt = computeNextRunAt(schedule, timezone, input.now ?? new Date());
+    }
+
+    if (!Object.keys(data).length) {
+      throw new UserFacingError(
+        "Automation already matches that update",
+        "AUTOMATION_NO_CHANGES",
+        `That automation already looks updated: ${automation.name}.`
+      );
+    }
+
+    return this.prisma.automation.update({
+      where: { id: automation.id },
+      data
     });
   }
 
@@ -279,7 +347,10 @@ export class AutomationService {
         where: {
           userId,
           status: { not: AutomationStatus.DELETED },
-          name: { contains: selector, mode: "insensitive" }
+          OR: [
+            { name: { contains: selector, mode: "insensitive" } },
+            { prompt: { contains: selector, mode: "insensitive" } }
+          ]
         },
         orderBy: { createdAt: "asc" },
         take: 3
@@ -354,6 +425,14 @@ export function formatAutomationCreated(automation: Automation): string {
   ].join("\n");
 }
 
+export function formatAutomationUpdated(automation: Automation): string {
+  return [
+    `Updated automation: ${automation.name}.`,
+    `Runs: ${automation.scheduleLabel}.`,
+    `Next run: ${formatForUser(automation.nextRunAt, automation.timezone)}.`
+  ].join("\n");
+}
+
 export function formatAutomationConfirmation(input: {
   name?: string;
   prompt: string;
@@ -391,6 +470,17 @@ function serializeAutomationSummary(automation: AutomationSummary) {
     nextRunAt: automation.nextRunAt.toISOString(),
     lastRunAt: automation.lastRunAt?.toISOString() ?? null
   };
+}
+
+function replaceTextCaseInsensitive(value: string, from: string, to: string): string {
+  const needle = from.trim();
+  const replacement = to.trim();
+  if (!needle || !replacement) return value;
+  return value.replace(new RegExp(escapeRegExp(needle), "gi"), replacement);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function dueAutomationWhere(now: Date): Prisma.AutomationWhereInput {

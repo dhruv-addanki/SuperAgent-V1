@@ -1,4 +1,4 @@
-import { MessageRole } from "@prisma/client";
+import { AutomationStatus, MessageRole, PendingActionStatus } from "@prisma/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runResponseLoopMock = vi.fn();
@@ -1066,6 +1066,187 @@ describe("agent orchestrator", () => {
     expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
       "+15555550100",
       'Create automation "Morning brief"? Reply yes to create it, or cancel.'
+    );
+  });
+
+  it("replaces a pending automation create payload when the user corrects a misheard name", async () => {
+    const pendingActionCreate = vi.fn(async ({ data }) => ({ id: "pending_kriti", ...data }));
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      auditLog: { create: vi.fn(async () => undefined) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 1 })),
+        findFirst: vi.fn(async () => ({
+          id: "pending_creepy",
+          userId: "user_1",
+          conversationId: "conversation_1",
+          actionType: "automation_create",
+          status: PendingActionStatus.PENDING,
+          expiresAt: new Date("2026-06-10T18:00:00.000Z"),
+          createdAt: new Date("2026-06-10T17:06:17.000Z"),
+          payload: {
+            toolName: "automation_create",
+            input: {
+              name: "Daily reminder to track points with Creepy",
+              prompt:
+                "Send a WhatsApp reminder every day at 11:00 PM to track points with Creepy.",
+              schedule: { frequency: "daily", time: "23:00" },
+              timezone: "America/New_York"
+            },
+            confirmationKeyword: "CONFIRM"
+          }
+        })),
+        create: pendingActionCreate
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "No with Kriti not creepy"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    const sent = whatsappService.sendTextMessage.mock.calls[0][1] as string;
+    expect(sent).toContain('Create automation "Daily reminder to track points with Kriti"?');
+    expect(sent).toContain("track points with Kriti");
+    expect(sent).not.toContain("Creepy");
+    expect(pendingActionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actionType: "automation_create",
+          payload: expect.objectContaining({
+            input: expect.objectContaining({
+              name: "Daily reminder to track points with Kriti",
+              prompt:
+                "Send a WhatsApp reminder every day at 11:00 PM to track points with Kriti."
+            })
+          })
+        })
+      })
+    );
+  });
+
+  it("updates an existing misheard automation instead of deleting another automation", async () => {
+    const existingAutomation = {
+      id: "automation_creepy",
+      userId: "user_1",
+      conversationId: "conversation_1",
+      channel: "WHATSAPP",
+      name: "Daily reminder to track points with Creepy",
+      prompt:
+        "Send a WhatsApp reminder every day at 11:00 PM to track points with Creepy.",
+      schedule: { frequency: "daily", time: "23:00" },
+      scheduleLabel: "Every day at 11:00 PM America/New_York",
+      timezone: "America/New_York",
+      status: AutomationStatus.ACTIVE,
+      nextRunAt: new Date("2026-06-11T03:00:00.000Z"),
+      lastRunAt: null,
+      lockedAt: null,
+      lockedBy: null,
+      lockExpiresAt: null,
+      createdAt: new Date("2026-06-10T17:09:27.000Z"),
+      updatedAt: new Date("2026-06-10T17:09:27.000Z")
+    };
+    const automationUpdate = vi.fn(async ({ data }) => ({
+      ...existingAutomation,
+      ...data,
+      updatedAt: new Date("2026-06-10T17:09:54.000Z")
+    }));
+    const prisma = {
+      user: {
+        upsert: vi.fn(async () => ({
+          id: "user_1",
+          whatsappPhone: "+15555550100",
+          timezone: "America/New_York"
+        }))
+      },
+      conversation: {
+        findFirst: vi.fn(async () => ({
+          id: "conversation_1",
+          userId: "user_1"
+        }))
+      },
+      message: {
+        create: vi.fn(async () => undefined),
+        findMany: vi.fn(async () => [])
+      },
+      memoryEntry: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => undefined)
+      },
+      googleAccount: { findUnique: vi.fn(async () => null) },
+      asanaAccount: { findUnique: vi.fn(async () => null) },
+      notionAccount: { findUnique: vi.fn(async () => null) },
+      auditLog: { create: vi.fn(async () => undefined) },
+      pendingAction: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null)
+      },
+      automation: {
+        findMany: vi.fn(async () => [existingAutomation]),
+        update: automationUpdate
+      }
+    } as any;
+    const whatsappService = {
+      sendTextMessage: vi.fn(async () => undefined),
+      sendTypingIndicator: vi.fn(async () => undefined)
+    } as any;
+    const orchestrator = new AgentOrchestrator(
+      prisma,
+      { createResponse: vi.fn() } as any,
+      whatsappService
+    );
+
+    await orchestrator.processInboundWhatsAppText({
+      from: "+15555550100",
+      text: "No can u edit it to with Kriti not creepy"
+    });
+
+    expect(runResponseLoopMock).not.toHaveBeenCalled();
+    expect(automationUpdate).toHaveBeenCalledWith({
+      where: { id: "automation_creepy" },
+      data: {
+        name: "Daily reminder to track points with Kriti",
+        prompt: "Send a WhatsApp reminder every day at 11:00 PM to track points with Kriti."
+      }
+    });
+    expect(whatsappService.sendTextMessage).toHaveBeenCalledWith(
+      "+15555550100",
+      expect.stringContaining("Updated automation: Daily reminder to track points with Kriti.")
     );
   });
 

@@ -42,7 +42,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     "When creating an automation, do not run the requested read tools immediately. Put the complete saved instructions in automation_create.prompt and normalize the schedule into frequency plus HH:mm local time.",
     "Use daily for every day, weekdays for Monday-Friday, and weekly with daysOfWeek where Sunday=0 and Saturday=6. If the recurring request does not include an exact time, ask one short clarifying question.",
     "automation_create requires backend confirmation. After it is requested, let the pending-action flow ask the user to reply yes or cancel.",
-    "Use automation_list, automation_pause, automation_resume, and automation_delete for automation management. If the target automation is unclear, ask the user to list automations and pick a number.",
+    "Use automation_list, automation_pause, automation_resume, automation_update, and automation_delete for automation management. For corrections like 'Kriti not Creepy', update the existing automation with automation_update; do not delete and recreate it. If the target automation is unclear, ask the user to list automations and pick a number.",
     "Scheduled automation runs are read-only digests. Never promise scheduled email sends, draft creation, calendar writes, task updates, or Notion/Docs writes.",
     "Tool outputs include a communication object. Base your reply primarily on communication.summary, then use communication.referenceEntities to resolve follow-ups.",
     "If communication.outcome is empty, reply as an empty result, not a failure. State that nothing matched and give the single best next step.",

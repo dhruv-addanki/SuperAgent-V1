@@ -248,6 +248,13 @@ describe("conversation context", () => {
             personality: "calm operator"
           },
           updatedAt: new Date()
+        },
+        {
+          key: "project_naming_preferences",
+          value: {
+            preferences: [{ currentName: "Scanis" }]
+          },
+          updatedAt: new Date()
         }
       ],
       pendingAction: null,
@@ -262,6 +269,7 @@ describe("conversation context", () => {
     expect(formatted).toContain(
       "Response preferences: concise, direct, bullets, minimal follow-ups, human-like, no em dashes, no casual dash separators, style: warm casual, personality: calm operator"
     );
+    expect(formatted).toContain("Project naming preferences: current project name Scanis");
   });
 
   it("includes bounded read-only personal context graph lines", () => {

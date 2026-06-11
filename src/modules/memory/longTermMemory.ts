@@ -7,6 +7,7 @@ interface MemoryExtractionResult {
   responsePreferences?: AssistantResponsePreferences;
   digestRulesUpdated?: boolean;
   asanaPriorityUpdated?: boolean;
+  projectNamingUpdated?: boolean;
 }
 
 export interface AssistantResponsePreferences {
@@ -105,6 +106,12 @@ export class LongTermMemory {
     if (asanaPriorityProfile) {
       await this.rememberAsanaPriorityProfile(user.id, asanaPriorityProfile);
       result.asanaPriorityUpdated = true;
+    }
+
+    const projectNamingPreference = extractProjectNamingPreference(text);
+    if (projectNamingPreference) {
+      await this.rememberProjectNamingPreference(user.id, projectNamingPreference);
+      result.projectNamingUpdated = true;
     }
 
     const toneMatch = text.match(
@@ -323,6 +330,41 @@ export class LongTermMemory {
       }
     });
   }
+
+  private async rememberProjectNamingPreference(
+    userId: string,
+    preference: ProjectNamingPreference
+  ): Promise<void> {
+    const existing = await this.prisma.memoryEntry.findUnique({
+      where: { userId_key: { userId, key: "project_naming_preferences" } }
+    });
+    const existingPreferences =
+      existing?.value &&
+      typeof existing.value === "object" &&
+      Array.isArray((existing.value as { preferences?: unknown }).preferences)
+        ? (existing.value as { preferences: unknown[] }).preferences.filter(isProjectNamingPreference)
+        : [];
+    const merged = dedupeProjectNamingPreferences([...existingPreferences, preference]).slice(-20);
+
+    await this.prisma.memoryEntry.upsert({
+      where: { userId_key: { userId, key: "project_naming_preferences" } },
+      update: {
+        value: { preferences: merged } as any,
+        confidence: 0.85
+      },
+      create: {
+        userId,
+        key: "project_naming_preferences",
+        value: { preferences: merged } as any,
+        confidence: 0.85
+      }
+    });
+  }
+}
+
+interface ProjectNamingPreference {
+  currentName: string;
+  previousName?: string;
 }
 
 function extractPreferredName(text: string): string | null {
@@ -611,6 +653,50 @@ function extractAsanaPriorityProfileUpdate(text: string): AsanaPriorityProfile |
     Object.keys(profile.projectWeights ?? {}).length ||
     (profile.taskPatternWeights ?? []).length;
   return hasAny ? profile : null;
+}
+
+function extractProjectNamingPreference(text: string): ProjectNamingPreference | null {
+  const match = text.match(
+    /\b(?:the\s+)?(?:name|project\s+name)\s+(?:was\s+)?(?:switched|changed|renamed)\s+to\s+["']?([A-Za-z0-9][A-Za-z0-9 _&.'-]{1,80})["']?/i
+  );
+  if (!match?.[1]) return null;
+  const currentName = normalizeProjectName(match[1]);
+  if (!currentName) return null;
+
+  const previousMatch = text.match(
+    /\b(?:from|formerly|old\s+name\s+was|used\s+to\s+be)\s+["']?([A-Za-z0-9][A-Za-z0-9 _&.'-]{1,80})["']?/i
+  );
+  const previousName = previousMatch?.[1] ? normalizeProjectName(previousMatch[1]) : undefined;
+
+  return {
+    currentName,
+    ...(previousName ? { previousName } : {})
+  };
+}
+
+function normalizeProjectName(value: string): string {
+  return value
+    .replace(/[.!?]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isProjectNamingPreference(value: unknown): value is ProjectNamingPreference {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { currentName?: unknown }).currentName === "string"
+  );
+}
+
+function dedupeProjectNamingPreferences(
+  preferences: ProjectNamingPreference[]
+): ProjectNamingPreference[] {
+  const deduped = new Map<string, ProjectNamingPreference>();
+  for (const preference of preferences) {
+    deduped.set(preference.currentName.toLowerCase(), preference);
+  }
+  return Array.from(deduped.values());
 }
 
 function buildDigestRule(

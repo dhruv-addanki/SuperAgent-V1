@@ -126,6 +126,28 @@ export function getApprovalDecision(
     };
   }
 
+  if (toolName === "automation_update") {
+    return {
+      requiresApproval: true,
+      confirmationKeyword: "CONFIRM",
+      confirmationMessage: formatAutomationManagementConfirmation("Update", input),
+      reason: "scheduled_automation_update"
+    };
+  }
+
+  if (toolName === "automation_delete") {
+    const target = input as { automationId?: unknown; number?: unknown };
+    if (typeof target.automationId === "string" || typeof target.number === "number") {
+      return { requiresApproval: false };
+    }
+    return {
+      requiresApproval: true,
+      confirmationKeyword: "CONFIRM",
+      confirmationMessage: formatAutomationManagementConfirmation("Delete", input),
+      reason: "scheduled_automation_delete"
+    };
+  }
+
   if (toolName === "calendar_create_event" || toolName === "calendar_update_event") {
     return { requiresApproval: false };
   }
@@ -207,6 +229,16 @@ export async function createPendingAction(
     payload: PendingToolPayload;
   }
 ): Promise<PendingAction> {
+  await prisma.pendingAction.updateMany({
+    where: {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      actionType: input.actionType,
+      status: PendingActionStatus.PENDING
+    },
+    data: { status: PendingActionStatus.CANCELLED }
+  });
+
   return prisma.pendingAction.create({
     data: {
       userId: input.userId,
@@ -217,6 +249,19 @@ export async function createPendingAction(
       expiresAt: pendingActionExpiry()
     }
   });
+}
+
+function formatAutomationManagementConfirmation(action: "Delete" | "Update", input: unknown): string {
+  const target = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const targetLabel =
+    typeof target.selector === "string"
+      ? `matching "${target.selector}"`
+      : typeof target.automationId === "string"
+        ? `with ID ${target.automationId}`
+        : typeof target.number === "number"
+          ? `#${target.number}`
+          : "selected";
+  return `${action} automation ${targetLabel}? Reply yes to confirm, or cancel.`;
 }
 
 export async function resolvePendingActionFromConversation(

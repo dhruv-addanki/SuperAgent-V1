@@ -110,6 +110,12 @@ export function buildConversationContext(input: {
       continue;
     }
 
+    if (entry.key === "project_naming_preferences") {
+      const summary = projectNamingSummary(entry.value);
+      if (summary) userPreferences.push(`Project naming preferences: ${summary}`);
+      continue;
+    }
+
     if (entry.key === "preferred_email_tone") {
       const tone =
         entry.value &&
@@ -160,7 +166,7 @@ export function buildConversationContext(input: {
       : "No central intent route was provided.",
     personalContextGraph: (input.personalContextGraph ?? []).slice(0, 8),
     communicationHints: Array.from(communicationHints).slice(0, 6),
-    userPreferences: userPreferences.slice(0, 4)
+    userPreferences: userPreferences.slice(0, 6)
   };
 }
 
@@ -224,6 +230,25 @@ function asanaPrioritySummary(value: unknown): string | null {
     .map(([name, weight]) => `${name} ${weight > 0 ? "+" : ""}${weight}`);
   const parts = [...categoryEntries, ...projectEntries];
   return parts.length ? parts.join(", ") : null;
+}
+
+function projectNamingSummary(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const preferences = Array.isArray((value as { preferences?: unknown }).preferences)
+    ? (value as { preferences: unknown[] }).preferences
+    : [];
+  const summaries = preferences
+    .slice(-4)
+    .map((preference) => {
+      if (!preference || typeof preference !== "object") return null;
+      const item = preference as { currentName?: unknown; previousName?: unknown };
+      if (typeof item.currentName !== "string") return null;
+      return typeof item.previousName === "string"
+        ? `${item.previousName} is now ${item.currentName}`
+        : `current project name ${item.currentName}`;
+    })
+    .filter((summary): summary is string => Boolean(summary));
+  return summaries.length ? summaries.join("; ") : null;
 }
 
 export function formatConversationContextForPrompt(context: ConversationContext): string {
@@ -686,7 +711,7 @@ function summarizeEntry(entry: PromptMemoryEntry): {
         : undefined,
       hints: entities.length
         ? [
-            "If the user says pause it, resume it, delete it, or the first automation, use the stored automation IDs."
+            "If the user refers to a numbered automation from the recent list, use the stored automation IDs. For wording corrections like 'not X, Y', update the matching automation instead of deleting and recreating it."
           ]
         : []
     };
